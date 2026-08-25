@@ -8,15 +8,29 @@ A lightweight, portable runtime for an autonomous one-person AI company.
 
 ## 一键安装 / One-line install
 
+国内/慢网络推荐(CDN 镜像入口)/ Recommended for slow networks:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/Hanley-Liu/opc@main/install.sh | sh
+```
+
+GitHub 直连(海外快)/ Direct GitHub:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Hanley-Liu/opc/main/install.sh | sh
 ```
 
-带 GitHub token(自动推送代码)/ with token for autonomous git push:
+带 GitHub token / with token for autonomous git push:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Hanley-Liu/opc/main/install.sh | sh -s -- --github-token ghp_xxx
+curl -fsSL https://cdn.jsdelivr.net/gh/Hanley-Liu/opc@main/install.sh | sh -s -- --github-token ghp_xxx
 ```
+
+### 下载镜像说明 / Mirrors
+
+- 安装器内置镜像链:**jsdelivr CDN → GitHub raw**,自动回退 + SHA256 完整性校验
+- 自定义镜像:`--mirror https://your-ghproxy.example.com`(或环境变量 `OPC_MIRROR`)
+- 完全离线:下载仓库到本地后 `./install.sh --local /path/to/opc`
 
 ## 安装模式 / Modes
 
