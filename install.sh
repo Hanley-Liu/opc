@@ -12,6 +12,8 @@
 #    --github-token TOKEN   store token for autonomous git push
 #    --local DIR            install from a local checkout instead of GitHub
 #    --prefix DIR           default $HOME/.local
+#    --mirror URL           force download mirror base (or env OPC_MIRROR)
+#                           default chain: jsdelivr CDN -> github raw
 #    --force                overwrite existing config files
 # ============================================================
 set -u
@@ -32,8 +34,9 @@ while [ $# -gt 0 ]; do
     --local) LOCAL_DIR="$2"; shift 2;;
     --prefix) PREFIX="$2"; shift 2;;
     --force) FORCE=1; shift;;
-    --repo) REPO="$2"; BRANCH="$3"; shift 3;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0;;
+    --repo) REPO="$2"; BRANCH="$3"; RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"; CDN="https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}"; shift 3;;
+    --mirror) USER_MIRROR="$2"; OPC_MIRROR="$2"; shift 2;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0;;
     *) echo "unknown arg: $1"; exit 1;;
   esac
 done
@@ -44,19 +47,62 @@ warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 fail() { printf '  \033[31m✘\033[0m %s\n' "$*"; exit 1; }
 
 RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+CDN="https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}"
+# user can force a mirror base via --mirror or env OPC_MIRROR
+USER_MIRROR="${OPC_MIRROR:-}"
 
-fetch() { # fetch <url-or-repo-relpath> <dest>
+fetch() { # fetch <repo-relpath> <dest> — multi-mirror + retry + integrity
   src="$1"; dst="$2"
+  # 0) local checkout wins
   if [ -n "$LOCAL_DIR" ] && [ -f "${LOCAL_DIR}/${src}" ]; then
     cp "${LOCAL_DIR}/${src}" "$dst" && return 0
   fi
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${RAW}/${src}" -o "$dst"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$dst" "${RAW}/${src}"
-  else
-    return 1
+  try_url() {
+    url="$1"
+    rm -f "${dst}.part"
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 240 -o "${dst}.part" "$url" || return 1
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q --tries=2 --timeout=20 -O "${dst}.part" "$url" || return 1
+    else
+      return 1
+    fi
+    [ -s "${dst}.part" ] || return 1
+    mv "${dst}.part" "$dst"
+    return 0
+  }
+  ok_dl=0
+  # user-forced mirror first (full-url prefix style or raw base style)
+  if [ -n "$USER_MIRROR" ]; then
+    case "$USER_MIRROR" in
+      http*) try_url "${USER_MIRROR%/}/${src}" && ok_dl=1 ;;
+    esac
   fi
+  if [ "$ok_dl" -eq 0 ]; then try_url "${CDN}/${src}" && ok_dl=1; fi          # jsdelivr CDN: usually fastest in CN
+  if [ "$ok_dl" -eq 0 ]; then try_url "${RAW}/${src}" && ok_dl=1; fi          # canonical source
+  [ "$ok_dl" -eq 1 ] || { rm -f "${dst}.part"; return 1; }
+  verify_hash "$src" "$dst"
+}
+
+verify_hash() { # verify against SHA256SUMS when we have it; warn-only on mismatch of non-binary files
+  rel="$1"; f="$2"
+  SUMS="${TMPDIR:-/tmp}/opc-shasums.$$"
+  if [ ! -f "$SUMS" ]; then
+    if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 30 "${CDN}/SHA256SUMS" -o "$SUMS" 2>/dev/null || \
+       curl -fsSL --connect-timeout 10 --max-time 30 "${RAW}/SHA256SUMS" -o "$SUMS" 2>/dev/null || true
+    fi
+    [ -s "$SUMS" ] || { rm -f "$SUMS"; return 0; }
+  fi
+  expect=$(grep " ${rel}\$" "$SUMS" 2>/dev/null | awk '{print $1}')
+  [ -z "$expect" ] && return 0
+  actual=""
+  if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$f" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then actual=$(shasum -a 256 "$f" | awk '{print $1}')
+  else rm -f "$SUMS"; return 0; fi
+  if [ "$actual" = "$expect" ]; then
+    rm -f "$SUMS"; return 0
+  fi
+  fail "checksum MISMATCH for ${rel} (${actual}) — download corrupted or tampered. Aborting."
 }
 
 # ---------------- arch -----------------
