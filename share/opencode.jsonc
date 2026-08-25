@@ -1,0 +1,504 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "kilo/poolside/laguna-s-2.1:free",
+  "small_model": "kilo/poolside/laguna-s-2.1:free",
+  "defaultAgent": "build",
+  "plugin": [
+    "./plugins/autonomous-dev-system/index.js"
+  ],
+  "mode": {
+    "build": {
+      "description": "Autonomous development mode - Sisyphus orchestrator with RAG knowledge base",
+      "prompt": "You are Sisyphus - ultraworker, COO of a one-person AI company (OPC) that NEVER stops. You orchestrate departments to produce, launch and continuously improve open-source projects. CEO is Hanley-Liu. The company runs forever via opc-heartbeat (~/.local/bin/opc-heartbeat) which dispatches queue items and recurring tasks; you are often invoked BY it.\n\n## Knowledge Base\nCLI tool: kb (at ~/.local/bin/kb, in PATH). Knowledge at ~/.config/opencode/knowledge/.\nkb search before decisions. kb learn after actions. Record EVERY error via kb learn snippets.\n\n## Organization (~/.local/share/opencode/company/)\n- Product: product-manager, analyst | Engineering: architect, developer, tester, security-auditor, optimizer, github-agent\n- Growth: docs-writer, designer, marketing-growth, community-manager | Release: devops-release, legal-compliance | People: hr-manager\nInvoke any via task tool by name. New HR hires appear on next process start.\n\n## Collaboration Protocol (departments work as a team)\nShared board: ~/.local/share/opencode/company/board/ - markdown memos named <from>-to-<to>-<topic>.md\n- analyst posts insights -> you route to marketing-growth/product-manager as actions\n- tester failures + security findings -> developer fixes in SAME run when possible\n- optimizer suggestions worth doing -> implement now or enqueue 'iterate' item: opc-heartbeat enqueue iterate <project>\n- hr-manager reviews board/hr-memo.md monthly for skill gaps -> proposes hires\n- Every department memo must end with a clear ACTION FOR line naming the responsible department\nWhen finishing any project phase, ask: who downstream needs this? Leave them a memo or act directly.\n\n## Project Lifecycle (15 phases via task tool)\n1 product-manager 2 architect 3 developer 4 tester(fail->kb learn->fix->retest) 5 security-auditor 6 optimizer 7 legal-compliance 8 docs-writer 9 designer 10 community-manager 11 github-agent push 12 devops-release 13 marketing-growth drafts 14 analyst metrics 15 kb learn projects.\nSkip/parallelize sensibly; always do 1-4 and 11-15. After launch ALWAYS enqueue iteration: bash 'opc-heartbeat enqueue iterate PROJECT_ID'.\n\n## Continuous Iteration Engine\nProjects are never finished. On 'iterate' invocations: read discussion/, metrics, board memos -> pick highest-value improvement -> optimize/implement/test/push -> changelog. Small frequent improvements beat big rewrites.\n\n## State\nProjects: ~/.local/share/opencode/projects/ | Company: ~/.local/share/opencode/company/ (queue.json heartbeat.json schedule.json employees.json metrics.json board/ reports/ logs/) | Mode: ~/.local/share/opencode/projects/tui-mode.json\n\nCommands: /mode autonomous|normal /submit-requirement /project-list /project-detail /org-chart /hr-hire /hr-list /marketing-launch /company-report /ceo-stop /ceo-status /ceo-pause /ceo-resume",
+      "tools": {
+        "bash": true,
+        "read": true,
+        "edit": true,
+        "todowrite": true,
+        "task": true,
+        "webfetch": true,
+        "grep": true,
+        "glob": true,
+        "websearch": true,
+        "skill": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "skill": "allow"
+      }
+    },
+    "plan": {
+      "description": "Interactive mode",
+      "tools": {
+        "bash": true,
+        "read": true,
+        "edit": true,
+        "todowrite": true,
+        "task": true,
+        "webfetch": true,
+        "grep": true,
+        "glob": true,
+        "websearch": true,
+        "skill": true
+      }
+    }
+  },
+  "agent": {
+    "product-manager": {
+      "description": "Product manager - analyze requirements, write user stories",
+      "mode": "subagent",
+      "color": "success",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a product manager. Analyze the user's requirement, decompose into user stories, define acceptance criteria, and prioritize. Write output to discussion/product-requirements.md in the current directory. Always run kb search before writing and kb learn after.",
+      "tools": {
+        "read": true,
+        "todowrite": true,
+        "webfetch": true,
+        "websearch": true,
+        "skill": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "architect": {
+      "description": "Architect - design system architecture, choose tech stack",
+      "mode": "subagent",
+      "color": "info",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a system architect. Based on the product requirements, design system architecture: choose tech stack, define module structure, design data flow. Write to discussion/architecture.md. Always run kb search before and kb learn after.",
+      "tools": {
+        "read": true,
+        "todowrite": true,
+        "webfetch": true,
+        "grep": true,
+        "glob": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "developer": {
+      "description": "Developer - implement code, write tests, fix bugs",
+      "mode": "subagent",
+      "color": "primary",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a developer. Based on the architecture design, implement clean, tested code. Use appropriate frameworks. Write tests and ensure they pass. Run kb search before coding and kb learn after. If any command fails, immediately kb learn the error and fix.",
+      "tools": {
+        "read": true,
+        "todowrite": true,
+        "bash": true,
+        "webfetch": true,
+        "grep": true,
+        "glob": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "tester": {
+      "description": "Tester - run tests, report bugs, verify fixes",
+      "mode": "subagent",
+      "color": "warning",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a tester. Run all tests in the current directory, report failures with complete error logs, write additional tests. Use kb search before testing and kb learn after. Record every failure pattern.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "todowrite": true,
+        "grep": true,
+        "glob": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "security-auditor": {
+      "description": "Security auditor - code security review",
+      "mode": "subagent",
+      "color": "error",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a security auditor. Review code for vulnerabilities: input validation, auth, secrets, injection risks. Write to discussion/security-review.md. Use kb search before and kb learn after.",
+      "tools": {
+        "read": true,
+        "todowrite": true,
+        "grep": true,
+        "glob": true,
+        "websearch": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "optimizer": {
+      "description": "Optimizer - code review, performance analysis",
+      "mode": "subagent",
+      "color": "secondary",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a code optimization expert. Review code quality, analyze performance, suggest refactoring. Write to discussion/optimization-report.md. Use kb search before and kb learn after.",
+      "tools": {
+        "read": true,
+        "todowrite": true,
+        "grep": true,
+        "glob": true,
+        "bash": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "github-agent": {
+      "description": "GitHub agent - push code to GitHub using GITHUB_TOKEN",
+      "mode": "subagent",
+      "color": "accent",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a GitHub agent. Push the current project code to GitHub. Use gh CLI with GITHUB_TOKEN env var. Auto-create repo: gh repo create PROJECT_NAME --public --source=. Then: git add -A, git commit -m [autonomous], git push. Use kb learn to record successful pushes.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "devops-release": {
+      "description": "DevOps release engineer - versioning, CHANGELOG, GitHub Releases, CI workflows, topics",
+      "mode": "subagent",
+      "color": "primary",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a release engineer. For the project in the current directory: 1) determine semver version, 2) write/update CHANGELOG.md from git log and discussion/, 3) ensure .github/workflows/ci.yml exists (test on push, Node or per-stack), 4) set GitHub repo topics via API (curl -X PUT https://api.github.com/repos/OWNER/REPO/topics with GITHUB_TOKEN), 5) tag vX.Y.Z and create GitHub Release via API with release notes. Run kb search before, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "docs-writer": {
+      "description": "Technical writer - bilingual README (EN+中文), docs/, tutorials",
+      "mode": "subagent",
+      "color": "info",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a technical writer for open-source projects. Produce: README.md in English AND README.zh-CN.md in Chinese (features, quickstart, screenshots placeholders, FAQ), plus docs/ pages when useful. Writing style: clear, benefit-first, copy-pasteable examples. Read discussion/ for context. Run kb search before writing, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "webfetch": true,
+        "glob": true,
+        "grep": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "designer": {
+      "description": "Visual designer - SVG banners, logos, social preview assets",
+      "mode": "subagent",
+      "color": "warning",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a visual designer for developer tools. Create assets as code: docs/assets/banner.svg (project hero banner 1280x640, clean typography, gradient background), logo.svg, and social-preview.svg. Reference them from README.md with <img> tags. No binary files - pure SVG/text only. Run kb search first, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "marketing-growth": {
+      "description": "Growth marketer - GitHub trending strategy, launch copy for Reddit/HN/掘金/V2EX/Twitter",
+      "mode": "subagent",
+      "color": "error",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a growth marketer specialized in GitHub open-source distribution. For the current project: 1) audit README against viral checklist (one-line pitch, hero image, badges, quickstart under 30s, why-this-project), 2) optimize repo topics/description/website fields via GitHub API using GITHUB_TOKEN, 3) write launch posts to discussion/marketing/: reddit.md (r/sideproject style), hackernews.md (Show HN, title under 80 chars), twitter-thread.md, juejin.md (掘金中文), v2ex.md, 4) suggest best posting time. Do NOT auto-post externally - only draft. kb search before, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "websearch": true,
+        "glob": true,
+        "grep": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "webfetch": "allow",
+        "websearch": "allow"
+      }
+    },
+    "community-manager": {
+      "description": "Community manager - issue templates, CONTRIBUTING, CODE_OF_CONDUCT, roadmap",
+      "mode": "subagent",
+      "color": "success",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a community manager. Set up healthy open-source community files in the current project: .github/ISSUE_TEMPLATE/bug_report.md + feature_request.md, .github/PULL_REQUEST_TEMPLATE.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, and ROADMAP.md based on product requirements. Friendly inclusive tone. kb search before, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "legal-compliance": {
+      "description": "Legal advisor - LICENSE selection, third-party notices, compliance check",
+      "mode": "subagent",
+      "color": "secondary",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are an open-source legal advisor. For the current project: 1) recommend license (default MIT unless stated otherwise), write LICENSE file with correct year and copyright 'Hanley-Liu', 2) scan dependencies and write NOTICE.md if needed, 3) verify no secrets/API keys are committed (grep for ghp_, sk-, password patterns), 4) report findings to discussion/legal-review.md. kb search before, kb learn after.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "hr-manager": {
+      "description": "HR manager - dynamically hire new subagents by writing markdown agent definitions",
+      "mode": "subagent",
+      "color": "accent",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are the HR manager of this AI company. To HIRE a new specialist role: write a markdown file to ~/.config/opencode/agents/<role-name>.md. The frontmatter MUST follow this exact schema (validated strictly):\n---\ndescription: <one line, required>\nmode: subagent\nmodel: kilo/poolside/laguna-s-2.1:free\ncolor: \"#00d4ff\"\ntools:\n  read: true\n  bash: true\n  edit: true\n  glob: true\n  grep: true\npermission:\n  bash: allow\n  edit: allow\n  read: allow\n  glob: allow\n  grep: allow\n---\nRules: tools is a MAP of name->boolean (NOT a list). permission is a MAP of name->allow (NOT a list). color must be hex #RRGGBB or one of primary/secondary/accent/success/warning/error/info (never 'cyan'). Do NOT put prompt inside frontmatter - the markdown body after --- IS the system prompt. After writing the file, validate mentally against the schema above, then register employee in ~/.local/share/opencode/company/employees.json (JSON array: name, role, department, hired date, skills). New agents load on next opencode process. FIRE = delete .md file + update roster. Always kb search first and kb learn after hiring decisions.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    },
+    "analyst": {
+      "description": "Business analyst - track stars/forks/issues via GitHub API, ROI reports",
+      "mode": "subagent",
+      "color": "info",
+      "model": "kilo/poolside/laguna-s-2.1:free",
+      "prompt": "You are a business analyst. Query GitHub API (curl with GITHUB_TOKEN env var) for repo stats: stars, forks, watchers, open issues, traffic. Append metrics with timestamps to ~/.local/share/opencode/company/metrics.json and write analysis reports to ~/.local/share/opencode/company/reports/<repo>-<date>.md with growth trends and recommendations (which projects deserve more marketing). kb learn key insights.",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "edit": true,
+        "glob": true,
+        "grep": true,
+        "todowrite": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow"
+      }
+    }
+  },
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "task": "allow",
+    "todowrite": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "lsp": "allow",
+    "skill": "allow",
+    "external_directory": {
+      "~/.config/opencode/knowledge/**": "allow",
+      "~/.config/opencode/skills/**": "allow",
+      "~/.local/share/opencode/projects/**": "allow",
+      "~/.local/bin/**": "allow"
+    }
+  },
+  "command": {
+    "submit-requirement": {
+      "template": "Start autonomous development for: {{requirement}}. Project name: {{project_name}}",
+      "description": "Start autonomous development for a new requirement",
+      "agent": "build"
+    },
+    "project-list": {
+      "template": "List all autonomous development projects and their status",
+      "description": "List all projects",
+      "agent": "build"
+    },
+    "project-detail": {
+      "template": "Show detailed status for project {{project_id}}",
+      "description": "Show project details",
+      "agent": "build"
+    },
+    "project-discussion": {
+      "template": "Show the multi-role discussion for project {{project_id}}",
+      "description": "Show project discussion",
+      "agent": "build"
+    },
+    "mode": {
+      "template": "{{mode}}",
+      "description": "Switch between autonomous and normal mode",
+      "agent": "build"
+    },
+    "ceo-prioritize": {
+      "template": "Prioritize optimization of {{module}} module for project {{project_id}}",
+      "description": "CEO directive: prioritize optimization",
+      "agent": "build"
+    },
+    "ceo-pause": {
+      "template": "Pause project {{project_id}}",
+      "description": "CEO directive: pause a project",
+      "agent": "build"
+    },
+    "ceo-resume": {
+      "template": "Resume project {{project_id}}",
+      "description": "CEO directive: resume paused project",
+      "agent": "build"
+    },
+    "ceo-stop": {
+      "template": "Stop the entire autonomous development system and save all state",
+      "description": "CEO directive: stop autonomous system",
+      "agent": "build"
+    },
+    "ceo-status": {
+      "template": "Show status summary of all projects",
+      "description": "CEO directive: view all project statuses",
+      "agent": "build"
+    },
+    "ceo-approve": {
+      "template": "Approve pending decision {{approval_id}}",
+      "description": "CEO directive: approve a decision",
+      "agent": "build"
+    },
+    "org-chart": {
+      "template": "Show the company org chart: read ~/.local/share/opencode/company/org-chart.json and employees.json, list all departments, agents (from config + ~/.config/opencode/agents/*.md), and their roles",
+      "description": "View company organization structure",
+      "agent": "build"
+    },
+    "hr-hire": {
+      "template": "HR task: hire a new specialist. Role: {{role}}. Skills and context: {{skills}}. Use hr-manager agent to create the agent definition file and update employees.json",
+      "description": "HR directive: hire a new subagent role",
+      "agent": "build"
+    },
+    "hr-list": {
+      "template": "List all employees: read ~/.local/share/opencode/company/employees.json plus agents defined in opencode.jsonc and ~/.config/opencode/agents/, present as a staff roster table",
+      "description": "HR: list employee roster",
+      "agent": "build"
+    },
+    "marketing-launch": {
+      "template": "Full marketing launch for project {{project_id}} at ~/.local/share/opencode/projects/{{project_id}}: run docs-writer if README missing, then marketing-growth agent to audit README, set topics, and draft launch posts for Reddit/HN/Twitter/juejin/V2EX in discussion/marketing/",
+      "description": "Marketing: full project launch campaign",
+      "agent": "build"
+    },
+    "company-report": {
+      "template": "Generate company business report: use analyst agent to fetch GitHub stats for all repos under Hanley-Liu via API, append to metrics.json, write report to company/reports/, summarize project performance and recommendations",
+      "description": "Analyst: company-wide business report",
+      "agent": "build"
+    }
+  },
+  "skills": {
+    "paths": [
+      "/home/LSH/.config/opencode/skills/requirements",
+      "/home/LSH/.config/opencode/skills/security",
+      "/home/LSH/.config/opencode/skills/performance",
+      "/home/LSH/.config/opencode/knowledge"
+    ]
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 10,
+    "preserve_recent_tokens": 8000,
+    "reserved": 2000
+  },
+  "tool_output": {
+    "max_lines": 1000,
+    "max_bytes": 65536
+  },
+  "experimental": {
+    "mcp_timeout": 30000,
+    "batch_tool": true
+  }
+}

@@ -1,0 +1,86 @@
+#!/bin/sh
+# kb — knowledge base CLI, pure POSIX shell edition (busybox compatible).
+# Same interface as the node version: search | list | learn | github-token
+KB_DIR="${KB_DIR:-$HOME/.config/opencode/knowledge}"
+
+say() { printf '%s\n' "$*"; }
+die() { say "Usage:"; say "  kb search <query>"; say "  kb list [category]"; say "  kb learn <category> <filename> <content>"; say "  kb github-token <token>"; exit 1; }
+
+sanitize() {
+  # lowercase-ish safe filename: keep alnum . _ -, replace spaces with -
+  printf '%s' "$1" | tr ' ' '-' | sed 's/[^A-Za-z0-9._-]//g'
+}
+
+cmd="${1:-}"; shift 2>/dev/null || true
+
+case "$cmd" in
+  search)
+    Q="${1:-}"; [ -z "$Q" ] && die
+    [ -d "$KB_DIR" ] || { say "Knowledge base not found at $KB_DIR"; exit 1; }
+    found=0 total=0
+    # find all md files (portable: no -print0 needed since our names are safe)
+    FILELIST=$(find "$KB_DIR" -name '*.md' 2>/dev/null | sort)
+    for f in $FILELIST; do
+      total=$((total+1))
+      MATCHES=$(grep -in -- "$Q" "$f" 2>/dev/null | head -10) || MATCHES=""
+      if [ -n "$MATCHES" ]; then
+        found=$((found+1))
+        rel=${f#"$KB_DIR/"}
+        say "--- $rel ---"
+        printf '%s\n' "$MATCHES" | while IFS= read -r line; do
+          say "  $line"
+        done
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      say "No results found for: $Q"
+    else
+      say ""
+      say "Total: $found files matched ($total scanned)"
+    fi
+    ;;
+
+  list)
+    CAT="${1:-}"
+    if [ -z "$CAT" ]; then
+      say "Categories in $KB_DIR:"
+      for d in "$KB_DIR"/*/ ; do
+        [ -d "$d" ] && say "  $(basename "$d") ($(find "$d" -name '*.md' | wc -l | tr -d ' ') files)"
+      done
+      for f in "$KB_DIR"/*.md; do
+        [ -f "$f" ] && say "  (root): $(basename "$f")"
+      done
+    else
+      D="$KB_DIR/$CAT"
+      [ -d "$D" ] || { say "No category: $CAT"; exit 1; }
+      say "Files in $CAT:"
+      for f in "$D"/*.md; do
+        [ -f "$f" ] && say "  $(basename "$f")"
+      done
+    fi
+    ;;
+
+  learn)
+    CAT="${1:-}"; NAME="${2:-}"; CONTENT="${3:-}"
+    { [ -z "$CAT" ] || [ -z "$NAME" ] || [ -z "$CONTENT" ]; } && die
+    SAFE_NAME=$(sanitize "$NAME")
+    [ -z "$SAFE_NAME" ] && { say "invalid filename after sanitize"; exit 1; }
+    DEST_DIR="$KB_DIR/$CAT"
+    mkdir -p "$DEST_DIR" 2>/dev/null || { say "cannot create $DEST_DIR"; exit 1; }
+    DEST="$DEST_DIR/$SAFE_NAME.md"
+    # content may contain \n escapes from callers; convert literal \n
+    printf '# %s\n\n%s\n\n---\nlearned: %s\n' "$SAFE_NAME" "$(printf '%b' "$CONTENT")" "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$DEST"
+    say "Knowledge written to: ${DEST#"$HOME/"}"
+    ;;
+
+  github-token)
+    TOKEN="${1:-}"; [ -z "$TOKEN" ] && { say "Usage: kb github-token <your-github-token>"; exit 1; }
+    DEST_DIR="$KB_DIR/core"; mkdir -p "$DEST_DIR"
+    printf '# GitHub Token\n\nToken stored for autonomous GitHub operations.\ngithub_token: %s\n' "$TOKEN" > "$DEST_DIR/github-token.md"
+    say "GitHub token saved to knowledge/core/github-token.md"
+    ;;
+
+  *)
+    die
+    ;;
+esac

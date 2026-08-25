@@ -1,0 +1,283 @@
+#!/usr/bin/env node
+/**
+ * OPC Heartbeat - the eternal loop of the one-person company.
+ * Dispatches work items and recurring department tasks to opencode agents.
+ *
+ * Commands:
+ *   opc-heartbeat start          Run forever (systemd entrypoint)
+ *   opc-heartbeat tick           Execute exactly ONE scheduling cycle (for testing/cron)
+ *   opc-heartbeat enqueue TYPE PROJECT_ID [PAYLOAD_JSON]   Push a work item
+ *   opc-heartbeat status         Show company operating state
+ *   opc-heartbeat pause/resume   Control the loop via heartbeat.json
+ */
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+import os from "os";
+
+const HOME = os.homedir();
+const COMPANY = path.join(HOME, ".local/share/opencode/company");
+const LOG_DIR = path.join(COMPANY, "logs");
+const HEARTBEAT_FILE = path.join(COMPANY, "heartbeat.json");
+const QUEUE_FILE = path.join(COMPANY, "queue.json");
+const FAILED_FILE = path.join(COMPANY, "failed.json");
+const SCHEDULE_FILE = path.join(COMPANY, "schedule.json");
+const MODE_FILE = path.join(HOME, ".local/share/opencode/projects/tui-mode.json");
+
+const TICK_INTERVAL_MIN = 10;            // idle sleep between cycles
+const RUN_TIMEOUT_MS = 55 * 60 * 1000;   // max duration per dispatched run
+const MAX_ATTEMPTS = 3;
+
+// Recurring tasks: name -> {everyMinutes, spec}
+const RECURRING = {
+  "metrics":             { everyMinutes: 360,   spec: { type: "metrics" } },
+  "iterate-review":      { everyMinutes: 1440,  spec: { type: "iterate-all" } },
+  "marketing-refresh":   { everyMinutes: 4320,  spec: { type: "marketing-refresh" } },
+  "knowledge-grooming":  { everyMinutes: 10080, spec: { type: "kb-grooming" } },
+  "self-improvement":    { everyMinutes: 10080, spec: { type: "self-improvement" } },
+};
+
+// ---------- tiny json utils ----------
+function ensureDirs() {
+  for (const d of [COMPANY, LOG_DIR]) fs.mkdirSync(d, { recursive: true });
+}
+function readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return fallback; }
+}
+function writeJson(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+function log(msg) {
+  ensureDirs();
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  fs.appendFileSync(path.join(LOG_DIR, "heartbeat.log"), line + "\n");
+}
+
+// ---------- state ----------
+function initDefaults() {
+  ensureDirs();
+  if (!fs.existsSync(HEARTBEAT_FILE))
+    writeJson(HEARTBEAT_FILE, { status: "running", tick_interval_minutes: TICK_INTERVAL_MIN, started_at: new Date().toISOString() });
+  if (!fs.existsSync(QUEUE_FILE)) writeJson(QUEUE_FILE, []);
+  if (!fs.existsSync(FAILED_FILE)) writeJson(FAILED_FILE, []);
+  if (!fs.existsSync(SCHEDULE_FILE)) writeJson(SCHEDULE_FILE, {});
+}
+
+function status() { return readJson(HEARTBEAT_FILE, { status: "running" }).status; }
+
+// ---------- work item -> opencode directive ----------
+function buildPrompt(item) {
+  switch (item.type) {
+    case "requirement":
+      return {
+        agent: "build",
+        dir: HOME,
+        prompt: `/submit-requirement ${item.payload?.requirement || item.payload || "New project"} Project name: ${item.project_id}. Follow the FULL 15-phase lifecycle including launch, release and marketing drafts. Enqueue follow-up work items when done.`,
+      };
+    case "launch":
+      return {
+        agent: "build",
+        dir: path.join(HOME, ".local/share/opencode/projects", item.project_id),
+        prompt: `Complete the LAUNCH phases for this project (phases 7-15): legal, docs, design, community files, GitHub push, release+CI, marketing drafts, metrics. Then kb learn.`,
+      };
+    case "iterate":
+      return {
+        agent: "build",
+        dir: path.join(HOME, ".local/share/opencode/projects", item.project_id),
+        prompt: `ITERATION PASS for this project: kb search lessons, run optimizer agent for improvement opportunities, implement top improvements via developer agent, re-test via tester agent, push updates via github-agent, note changes in CHANGELOG. Do not restart from scratch. Record outcomes with kb learn.`,
+      };
+    case "iterate-all":
+      return {
+        agent: "build",
+        dir: HOME,
+        prompt: `Review ALL projects in ~/.local/share/opencode/projects/. For each launched repo under github.com/Hanley-Liu decide: needs bugfix, feature iteration, or docs/marketing refresh. Pick the TOP 1 most valuable improvement overall and execute it now (dispatch subagents). Enqueue 'iterate' work items for the rest by priority. Update company/metrics.json.`,
+      };
+    case "market":
+      return {
+        agent: "marketing-growth",
+        dir: path.join(HOME, ".local/share/opencode/projects", item.project_id),
+        prompt: `MARKETING REFRESH: audit current README vs competitor best practices (websearch), refresh topics/badges/description via GitHub API (GITHUB_TOKEN set), add 1 new launch-angle post draft to discussion/marketing/. kb learn what changed.`,
+      };
+    case "marketing-refresh":
+      return {
+        agent: "build",
+        dir: HOME,
+        prompt: `Marketing review day: list all repos for Hanley-Liu via GitHub API (GITHUB_TOKEN set), fetch stars/forks, pick the repo with best momentum or worst conversion, and do a marketing refresh for it (dispatch marketing-growth). Log reasoning to company/reports/marketing-<date>.md`,
+      };
+    case "metrics":
+      return {
+        agent: "analyst",
+        dir: HOME,
+        prompt: `Collect metrics: query GitHub API for all repos of user Hanley-Liu (GITHUB_TOKEN env var is set): stars, forks, watchers, open_issues. Append timestamped snapshot to ~/.local/share/opencode/company/metrics.json (read-modify-write). Write a 5-line trend summary to ~/.local/share/opencode/company/reports/metrics-latest.md. Also check company/board/ memos needing data.`,
+      };
+    case "kb-grooming":
+      return {
+        agent: "build",
+        dir: HOME,
+        prompt: `Knowledge grooming: run 'kb list' across categories in ~/.config/opencode/knowledge/. Deduplicate overlapping snippets, merge related error fixes into patterns, flag outdated entries. Report what was consolidated to company/reports/kb-grooming.md. kb learn the summary.`,
+      };
+    case "self-improvement":
+      return {
+        agent: "build",
+        dir: HOME,
+        prompt: `SELF-IMPROVEMENT REVIEW: read recent logs in ~/.local/share/opencode/company/logs/ and failed.json. Identify: recurring failure patterns, slow phases, permission/config friction. Propose and APPLY up to 3 concrete system improvements (update playbooks in kb, adjust prompts via config notes, propose HR hires by enqueuing nothing but writing recommendations to company/board/hr-memo.md). kb learn conclusions.`,
+      };
+    case "custom":
+    default:
+      return {
+        agent: item.agent || "build",
+        dir: item.dir ? path.resolve(item.dir.replace(/^~/, HOME)) : HOME,
+        prompt: typeof item.payload === "string" ? item.payload : JSON.stringify(item.payload),
+      };
+  }
+}
+
+function dispatch(item) {
+  const spec = buildPrompt(item);
+  log(`DISPATCH ${item.type}${item.project_id ? ":" + item.project_id : ""} -> agent=${spec.agent}`);
+  const env = { ...process.env };
+  // Guarantee PATH contains kb & GITHUB_TOKEN is present (token also flows via git insteadOf rewrite)
+  env.PATH = `${HOME}/.local/bin:${env.PATH || ""}`;
+  // Prefer the native lightweight runtime; fall back to opencode for backward compat.
+  const native = fs.existsSync(`${HOME}/.local/bin/opc-agent`);
+  const argvArr = native
+    ? ["opc-agent", "run", spec.prompt, "--dir", spec.dir, "--agent", spec.agent]
+    : ["opencode", "run", spec.prompt, "--dir", spec.dir, "--agent", spec.agent];
+  const res = spawnSync(argvArr[0], argvArr.slice(1), {
+    timeout: RUN_TIMEOUT_MS,
+    env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const out = (res.stdout || "") + (res.stderr || "");
+  const tail = out.split("\n").slice(-12).join("\n");
+  fs.appendFileSync(path.join(LOG_DIR, "runs.log"),
+    `\n===== [${new Date().toISOString()}] ${item.type}:${item.project_id || "-"} exit=${res.status} signal=${res.signal || "-"} =====\n${out.slice(-20000)}\n`);
+  if (res.status === 0) { log(`DONE ${item.type} OK`); return true; }
+  log(`FAIL ${item.type} exit=${res.status}\n${tail}`);
+  return false;
+}
+
+function processQueue() {
+  let queue = readJson(QUEUE_FILE, []);
+  if (queue.length === 0) return false;
+  queue.sort((a, b) => (b.priority ?? 5) - (a.priority ?? 5));
+  const item = queue.shift();
+  writeJson(QUEUE_FILE, queue);
+
+  const ok = dispatch(item);
+  if (!ok) {
+    item.attempts = (item.attempts || 0) + 1;
+    if (item.attempts >= MAX_ATTEMPTS) {
+      const failed = readJson(FAILED_FILE, []);
+      item.failed_at = new Date().toISOString();
+      failed.push(item);
+      writeJson(FAILED_FILE, failed);
+      log(`DEAD-LETTER ${item.type}:${item.project_id || ""} after ${item.attempts} attempts`);
+    } else {
+      queue.push(item); // requeue for retry
+      writeJson(QUEUE_FILE, queue);
+    }
+  }
+  return true;
+}
+
+function dueRecurring() {
+  const sched = readJson(SCHEDULE_FILE, {});
+  const now = Date.now();
+  for (const [name, task] of Object.entries(RECURRING)) {
+    const last = sched[name] ? Date.parse(sched[name]) : 0;
+    if (now - last > task.everyMinutes * 60_000) {
+      sched[name] = new Date().toISOString();
+      writeJson(SCHEDULE_FILE, sched);
+      return { type: task.spec.type, project_id: null, priority: 3, source: `recurring:${name}` };
+    }
+  }
+  return null;
+}
+
+function tickOnce() {
+  initDefaults();
+  const st = status();
+  if (st !== "running") { log(`cycle skipped (status=${st})`); return false; }
+
+  // External kill-switch: mode file can pause the whole company too
+  try {
+    const mode = readJson(MODE_FILE, {});
+    if (mode && mode.autonomous === false && mode.pause_company === true) {
+      log("cycle skipped (tui-mode pause_company)");
+      return false;
+    }
+  } catch {}
+
+  if (processQueue()) return true;              // 1) queued work first
+  const rec = dueRecurring();                    // 2) then due recurring tasks
+  if (rec) { dispatchAndConsume(rec); return true; }
+  return false;
+}
+
+function dispatchAndConsume(item) { dispatch(item); return true; }
+
+function cmdStart() {
+  initDefaults();
+  writeJson(HEARTBEAT_FILE, { status: "running", tick_interval_minutes: TICK_INTERVAL_MIN, started_at: new Date().toISOString() });
+  log(`HEARTBEAT STARTED pid=${process.pid}`);
+  for (;;) {
+    try { tickOnce(); }
+    catch (e) { log(`TICK ERROR: ${e.message}`); }
+    const st = status();
+    if (st === "stopped") { log("HEARTBEAT STOPPED"); break; }
+    const mins = readJson(HEARTBEAT_FILE, {}).tick_interval_minutes || TICK_INTERVAL_MIN;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, mins * 60_000);
+  }
+}
+
+// ---------- CLI ----------
+const [, , cmd, a, b] = process.argv;
+initDefaults();
+switch (cmd) {
+  case "start": cmdStart(); break;
+  case "tick": {
+    const did = (() => {
+      initDefaults();
+      if (status() !== "running") return false;
+      if (processQueue()) return true;
+      const rec = dueRecurring();
+      if (rec) { dispatch(rec); return true; }
+      return false;
+    })();
+    console.log(did ? "tick: executed work" : "tick: nothing due");
+    break;
+  }
+  case "enqueue": {
+    // opc-heartbeat enqueue TYPE PROJECT_ID [PAYLOAD]
+    const queue = readJson(QUEUE_FILE, []);
+    queue.push({
+      id: `w-${Date.now()}`,
+      type: a,
+      project_id: b && b.startsWith("{") ? null : (b || null),
+      payload: b && b.startsWith("{") ? JSON.parse(b) : (process.argv[5] || null),
+      priority: 5,
+      attempts: 0,
+      created_at: new Date().toISOString(),
+      source: "cli",
+    });
+    writeJson(QUEUE_FILE, queue);
+    console.log(`enqueued ${a} (queue=${queue.length})`);
+    break;
+  }
+  case "pause": writeJson(HEARTBEAT_FILE, { ...readJson(HEARTBEAT_FILE, {}), status: "paused" }); console.log("paused"); break;
+  case "resume": writeJson(HEARTBEAT_FILE, { ...readJson(HEARTBEAT_FILE, {}), status: "running" }); console.log("resumed"); break;
+  case "stop": writeJson(HEARTBEAT_FILE, { ...readJson(HEARTBEAT_FILE, {}), status: "stopped" }); console.log("stop requested"); break;
+  case "status": {
+    const hb = readJson(HEARTBEAT_FILE, {});
+    const q = readJson(QUEUE_FILE, []);
+    const f = readJson(FAILED_FILE, []);
+    console.log(JSON.stringify({ status: hb.status, queue: q.length, failed: f.length, schedule: readJson(SCHEDULE_FILE, {}) }, null, 2));
+    break;
+  }
+  default:
+    console.log("Usage: opc-heartbeat start|tick|enqueue TYPE PROJECT_ID [PAYLOAD]|pause|resume|stop|status");
+}
