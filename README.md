@@ -1,5 +1,14 @@
 # OPC — One-Person AI Company Runtime
 
+![GitHub stars](https://img.shields.io/github/stars/Hanley-Liu/opc?style=social)
+![GitHub forks](https://img.shields.io/github/forks/Hanley-Liu/opc?style=social)
+![GitHub license](https://img.shields.io/github/license/Hanley-Liu/opc)
+![GitHub last commit](https://img.shields.io/github/last-commit/Hanley-Liu/opc)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/Hanley-Liu/opc)
+![Go version](https://img.shields.io/github/go-mod/go-version/Hanley-Liu/opc)
+![Code size](https://img.shields.io/github/languages/code-size/Hanley-Liu/opc)
+![Docker Pulls](https://img.shields.io/badge/static%20binary-5MB-blue)
+
 轻量、可移植的自主 AI 公司运行时。**零依赖单二进制**,从 2010 年的 32 位上网本到现代服务器都能跑。
 
 A lightweight, portable runtime for an autonomous one-person AI company.
