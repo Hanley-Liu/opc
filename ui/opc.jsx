@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// opc — OPC 永动公司 · 全屏驾驶台
-// 设计: 参考 gemini-cli 的 Ink 架构(chrome/对话框/提示条)，界面与交互为本产品定稿
+// opc — OPC 永动公司驾驶台 v3
+// 设计定稿：双栏布局（左对话 / 右公司侧栏）+ opencode 消息规范（说话人标签+折叠工具）
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import { spawn } from "node:child_process";
@@ -12,36 +12,42 @@ import path from "node:path";
 const C = {
   primary: "#7aa2f7", secondary: "#bb9af7", text: "#c0caf5", muted: "#565f89",
   error: "#f7768e", success: "#9ece6a", warn: "#e0af68", tool: "#7dcfff",
-  border: "#3d445c", hiBg: "#292e42", panelBg: "#16161e",
+  border: "#3d445c", hiBg: "#292e42", panel: "#16161e",
 };
 const COMPANY = path.join(os.homedir(), ".local/share/opencode/company");
 const PROJECTS = path.join(os.homedir(), ".local/share/opencode/projects");
-const MAX_RESULT = 10;
+const MAX_RESULT = 8;
 
 let idc = 0;
 const nid = () => `e${++idc}`;
 const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
-const trunc = (s, w) => { s = String(s ?? "").replace(/\n/g, " "); const r = [...s]; return r.length <= w ? s : r.slice(0, Math.max(0,w-1)).join("") + "…"; };
+const trunc = (s, w) => { s = String(s ?? "").replace(/\n/g, " "); const r = [...s]; return r.length <= w ? s : r.slice(0, Math.max(1, w - 1)).join("") + "…"; };
 
 const AGENTS = [
-  { id: "build", name: "Sisyphus", desc: "COO·编排兜底" },
-  { id: "product-manager", name: "产品经理", desc: "需求PRD" },
-  { id: "architect", name: "架构师", desc: "系统设计" },
-  { id: "developer", name: "开发者", desc: "编码实现" },
-  { id: "tester", name: "测试员", desc: "质量保证" },
-  { id: "security-auditor", name: "安全审计", desc: "漏洞扫描" },
-  { id: "docs-writer", name: "文档", desc: "README教程" },
-  { id: "marketing-growth", name: "增长营销", desc: "涨星推广" },
-  { id: "github-agent", name: "发布官", desc: "git推送" },
-  { id: "devops-release", name: "发布工程", desc: "版本CI" },
-  { id: "analyst", name: "分析师", desc: "数据洞察" },
-  { id: "legal-compliance", name: "法务", desc: "License合规" },
+  ["build", "Sisyphus", "COO·编排"],
+  ["product-manager", "产品经理", "需求PRD"],
+  ["architect", "架构师", "系统设计"],
+  ["developer", "开发者", "编码实现"],
+  ["tester", "测试员", "质量保证"],
+  ["security-auditor", "安全审计", "漏洞扫描"],
+  ["docs-writer", "文档", "README"],
+  ["marketing-growth", "增长营销", "涨星推广"],
+  ["github-agent", "发布官", "git推送"],
+  ["devops-release", "发布工程", "版本CI"],
+  ["analyst", "分析师", "数据洞察"],
+  ["legal-compliance", "法务", "合规"],
 ];
 
 function companyState() {
   const pool = readJSON(path.join(COMPANY, "pool.json"), []);
   const eng = readJSON(path.join(COMPANY, "engine.json"), { running: false });
   return { pool, active: pool.filter(p => p.status === "active"), running: !!eng.running };
+}
+
+function trimLines(s, maxLines) {
+  const lines = String(s).split("\n");
+  if (lines.length <= maxLines) return s;
+  return lines.slice(0, maxLines).join("\n") + "\n… (+" + (lines.length - maxLines) + " 行，全文见审计日志)";
 }
 
 function prettyParams(raw) {
@@ -53,8 +59,6 @@ function prettyParams(raw) {
     if (m.path) return m.path;
     if (m.pattern) return "/" + m.pattern;
     if (m.agent) return `→ ${m.agent}`;
-    if (m.query) return m.query;
-    if (m.url) return m.url;
   } catch {}
   return raw;
 }
@@ -72,132 +76,178 @@ function route(task) {
   return "build";
 }
 
-// ─────────── 条目渲染 ───────────
-function Entry({ e, w }) {
-  switch (e.type) {
-    case "user":
-      return (
-        <Box>
-          <Text color={C.secondary} bold>{"▌ "}</Text>
-          <Text color={C.text}>{e.text}</Text>
-        </Box>
-      );
-    case "assistant":
-      return (
-        <Box flexDirection="column">
-          {(e.body || "").split("\n").map((l, i) => (
-            <Text key={i}><Text color={C.primary} bold>{"▌ "}</Text><Text color={C.text}>{l}</Text></Text>
-          ))}
-          <Text dimColor>{"  " + (e.meta || "")}</Text>
-        </Box>
-      );
-    case "tool":
-      return (
-        <Box paddingLeft={2}>
-          <Text>
-            <Text color={C.tool} bold>⚡ </Text>
-            <Text color={C.tool}>{e.tool} </Text>
-            <Text color={C.muted}>{trunc(prettyParams(e.args), Math.max(20, w - 16))}</Text>
-          </Text>
-        </Box>
-      );
-    case "result": {
-      const color = e.ok ? C.success : C.error;
-      const lines = String(e.output ?? "").replace(/\n+$/, "").split("\n").slice(0, MAX_RESULT);
-      return (
-        <Box flexDirection="column" paddingLeft={4}>
-          {lines.map((l, i) => (
-            <Text key={i} color={color}>{(i === 0 ? (e.ok ? "✓ " : "✖ ") : "  ") + l}</Text>
-          ))}
-        </Box>
-      );
-    }
-    case "info":
-      return <Box paddingLeft={2}><Text dimColor>{e.text}</Text></Box>;
-    case "error":
-      return <Box paddingLeft={2}><Text color={C.error}>✖ {e.text}</Text></Box>;
-    default:
-      return null;
+// 极简 markdown：**粗体** / ```代码块``` / 列表保持
+function mdLite(text, w, textColor) {
+  const out = [];
+  let inCode = false;
+  for (let raw of String(text || "").split("\n")) {
+    if (raw.trim().startsWith("```")) { inCode = !inCode; continue; }
+    const bold = (l) => l.replace(/\*\*(.+?)\*\*/g, "\x1b[1m$1\x1b[22m");
+    const styled = bold(raw);
+    if (inCode) out.push(lipglossText("  │ " + trunc(styled, w - 6), C.tool));
+    else out.push(lipglossText(trunc(styled, w - 2), textColor));
   }
+  return out;
+}
+function lipglossText(text, color) {
+  return <Text color={color}>{text}</Text>;
 }
 
-// ─────────── 对话框 ───────────
-function Dialog({ title, items, sel, onSelect, onClose, width }) {
-  return (
-    <Box position="absolute" justifyContent="center" width={width} marginTop={2}>
-      <Box flexDirection="column" borderStyle="round" borderColor={C.primary}
-           paddingX={1} width={Math.min(72, width - 6)} backgroundColor={C.panelBg}>
-        <Text bold color={C.primary}> {title}</Text>
-        {items.map((it, i) => (
-          <Text key={i} backgroundColor={i === sel ? C.hiBg : undefined}
-                color={i === sel ? C.text : C.muted}>
-            {" "}{i === sel ? "▶ " : "  "}{it.label}
-          </Text>
-        ))}
-        <Text dimColor>{" ↑↓选择 · Enter确认 · Esc关闭"}</Text>
+// ─────────── 条目 ───────────
+// kind: user | assistant | tool(含 result 合并渲染)
+function EntryView({ e, w, expanded }) {
+  const nameW = 4;
+
+  if (e.kind === "user") {
+    return (
+      <Box flexDirection="column" marginBottom={0}>
+        <Text><Text color={C.secondary} bold>{"你"}</Text><Text dimColor>{" ──"}</Text></Text>
+        <Box paddingLeft={nameW} flexDirection="column">
+          {wrap(e.text, Math.max(20, w - nameW))}
+        </Box>
       </Box>
-    </Box>
-  );
+    );
+  }
+  if (e.kind === "assistant") {
+    return (
+      <Box flexDirection="column">
+        <Text>
+          <Text color={C.primary} bold>{"Si"}</Text>
+          <Text dimColor>{" ── " + trunc(e.model || "", 22) + " ↑" + (e.ptok||0) + " ↓" + (e.ctok||0) + " tok"}</Text>
+        </Text>
+        <Box paddingLeft={nameW} flexDirection="column">
+          {mdLite(e.text, Math.max(20, w - nameW), C.text)}
+        </Box>
+      </Box>
+    );
+  }
+  if (e.kind === "info") {
+    return <Box paddingLeft={nameW}><Text dimColor>· {e.text}</Text></Box>;
+  }
+  if (e.kind === "error") {
+    return <Box paddingLeft={nameW}><Text color={C.error}>✖ {trunc(e.text, w - 6)}</Text></Box>;
+  }
+  if (e.kind === "tool") {
+    const mark = e.hasResult ? (e.ok ? "✓" : "✖") : "⟳";
+    const markColor = e.hasResult ? (e.ok ? C.success : C.error) : C.warn;
+    const head = `${mark} ⚡ ${e.tool}: ${trunc(prettyParams(e.args), Math.max(16, w - nameW - 14))}`;
+    return (
+      <Box flexDirection="column" paddingLeft={nameW}>
+        <Text>
+          <Text color={markColor} bold>{mark + " "}</Text>
+          <Text color={C.tool}>{e.tool} </Text>
+          <Text dimColor>{trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))}</Text>
+          {expanded ? null : e.output && !e.isErr ? <Text dimColor>{" ✓"}</Text> : null}
+        </Text>
+        {expanded ? (
+          <Box flexDirection="column" paddingLeft={2}>
+            {(String(e.output ?? "").split("\n").slice(0, MAX_RESULT).map((l, i) =>
+              <Text key={i} color={e.isErr ? C.error : C.muted}>│ {trunc(l, w - nameW - 6)}</Text>
+            ))}
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }
+  return null;
+}
+
+function wrap(s, w) {
+  const out = [];
+  for (const para of String(s).split("\n")) {
+    if (!para) { out.push(""); continue; }
+    let line = "";
+    for (const word of para.split(" ")) {
+      if (!line) line = word;
+      else if ([...line].length + 1 + [...word].length <= w) line += " " + word;
+      else { out.push(line); line = word; }
+    }
+    out.push(line);
+  }
+  return out.map((l, i) => <Text key={i} color={C.text}>{l}</Text>);
 }
 
 // ─────────── App ───────────
 function App({ initialDir }) {
   const { exit } = useApp();
-
   const [entries, setEntries] = useState([]);
-  const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [liveTool, setLiveTool] = useState(null);   // {tool,args}
   const [input, setInput] = useState("");
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
-  const [tok, setTok] = useState(0);
+  const [tok, setTok] = useState({ p: 0, c: 0 });
   const [tick, setTick] = useState(0);
-  const [scrollOffset, setScrollOffset] = useState(0); // 0=贴底
-  const [dialog, setDialog] = useState(null); // {type:'proj'|'agent'|'bill'|'history', sel}
-  const [focusProj, setFocusProj] = useState(null); // 聚焦项目（过滤+路由）
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  const [dialog, setDialog] = useState(null);
+  const [dialogSel, setDialogSel] = useState(0);
+  const [focusProj, setFocusProj] = useState(null);
   const [notice, setNotice] = useState("");
+  const [scrollFromBottom, setScrollFromBottom] = useState(0);
   const pendingToolRef = useRef(null);
+  const { stdout } = process;
 
   useEffect(() => {
-    // 进入备用屏幕：彻底根治画面堆叠
-    process.stdout.write("\x1b[?1049h\x1b[H");
+    stdout.write("\x1b[?1049h\x1b[H");
     const t = setInterval(() => setTick(x => x + 1), 1200);
-    return () => {
-      clearInterval(t);
-      process.stdout.write("\x1b[?1049l");
-    };
+    return () => { clearInterval(t); stdout.write("\x1b[?1049l"); };
   }, []);
 
-  const push = useCallback((e) => setEntries(prev => [...prev.slice(-199), e]), []);
   const notice_ = useCallback((text, isErr) => {
-    push(isErr ? { id: nid(), type: "error", text } : { id: nid(), type: "info", text });
-  }, [push]);
+    setEntries(prev => [...prev.slice(-199),
+      { id: nid(), kind: isErr ? "error" : "info", text }]);
+  }, []);
 
+  // 引擎事件 → 统一条目流（工具与其结果合并为一个条目）
   const handleEngineEvent = useCallback((ev) => {
-    setEntries(prev => [...prev.slice(-199), { ...ev, id: ev.run + ":" + ev.type + ":" + (ev.tool||"") + ":" + Math.random().toString(36).slice(2,6) }]);
     switch (ev.type) {
       case "llm":
-        setModel(ev.model || model); setTok(t => t + (ev.prompt_tokens||0) + (ev.completion_tokens||0));
+        setModel(ev.model || model);
+        setTok(t => ({ p: t.p + (ev.prompt_tokens||0), c: t.c + (ev.completion_tokens||0) }));
         break;
       case "tool":
-        pendingToolRef.current = ev; break;
+        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false };
+        break;
       case "result":
-        pendingToolRef.current = null; break;
+        if (pendingToolRef.current) {
+          const t = pendingToolRef.current;
+          t.output = ev.output; t.hasResult = true; t.ok = ev.ok === true || ev.status === "success"; t.isErr = !t.ok;
+          setEntries(prev => [...prev.slice(-199), t]);
+          pendingToolRef.current = null;
+        }
+        break;
       case "run-done": {
-        pendingToolRef.current = null;
+        if (pendingToolRef.current) {
+          const t = pendingToolRef.current;
+          t.output = "(中断)"; t.hasResult = true; t.ok = false;
+          setEntries(prev => [...prev.slice(-199), t]);
+          pendingToolRef.current = null;
+        }
         const tk = ev.tokens || {};
-        setTok(t => t + (tk.total || ev.total_tokens || 0));
+        const body = trimLines((ev.output || ev.summary || "").trim() || "(无输出)", 10);
+        setModel(ev.model || model);
+        setEntries(prev => [...prev.slice(-199), {
+          id: nid(), kind: "assistant",
+          text: body,
+          model: ev.model, ptok: tk.prompt||0, ctok: tk.completion||0,
+        }]);
+        setTok(t => ({ p: t.p + (tk.prompt||0), c: t.c + (tk.completion||0) }));
         setBusy(false);
         break;
       }
       case "llm-error":
-        setBusy(false); break;
+        setEntries(prev => [...prev.slice(-199),
+          { id: nid(), kind: "error", text: "模型错误: " + ev.error }]);
+        setBusy(false);
+        break;
     }
-    setScrollOffset(0); // 新事件自动贴底
   }, [model]);
 
-  const submitTask = useCallback((task, forceAgent, forceDir) => {
-    let dir = forceDir || initialDir;
-    if (!forceDir) {
+  const submitTask = useCallback((task, forceAgent) => {
+    let dir = initialDir;
+    if (focusProj) {
+      const d = path.join(PROJECTS, focusProj);
+      if (fs.existsSync(d)) dir = d;
+    } else {
       const st = companyState();
       for (const p of st.pool) if (task.toLowerCase().includes(p.id.toLowerCase())) {
         const d = path.join(PROJECTS, p.id);
@@ -205,13 +255,9 @@ function App({ initialDir }) {
         break;
       }
     }
-    if (focusProj) {
-      const d = path.join(PROJECTS, focusProj);
-      if (fs.existsSync(d)) dir = d;
-    }
     const agentID = forceAgent || route(task);
     setBusy(true);
-    push({ id: nid(), type: "user", text: task });
+    setEntries(prev => [...prev.slice(-199), { id: nid(), kind: "user", text: task }]);
     const child = spawn("opc-agent",
       ["run", task, "--dir", dir, "--agent", agentID, "--json"],
       { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir });
@@ -227,104 +273,28 @@ function App({ initialDir }) {
       }
     });
     child.on("error", e => { setBusy(false); notice_("启动失败: " + e.message, true); });
-    child.on("close", code => {
-      pendingToolRef.current = null; setBusy(false);
-      if (code !== 0) notice_(`退出码 ${code}`, true);
+    child.on("close", () => {
+      if (pendingToolRef.current) {
+        const t = pendingToolRef.current;
+        t.output = "(中断)"; t.hasResult = true; t.ok = false;
+        setEntries(prev => [...prev.slice(-199), t]);
+        pendingToolRef.current = null;
+      }
+      setBusy(false);
     });
-  }, [initialDir, focusProj, push, notice_, handleEngineEvent]);
-
-  useInput((ch, key) => {
-    if (key.ctrl && ch === "c") { exit(); return; }
-
-    // 对话框开启时接管按键
-    if (dialog) {
-      const list = dialogList(dialog.type);
-      if (key.upArrow) setDialog(d => ({ ...d, sel: Math.max(0, d.sel - 1) }));
-      if (key.downArrow) setDialog(d => ({ ...d, sel: Math.min(list.length - 1, d.sel + 1) }));
-      if (key.escape) setDialog(null);
-      if (key.return) {
-        const it = list[dialog.sel];
-        if (it) it.onPick?.();
-        if (dialog.type !== "bill" && dialog.type !== "history") setDialog(null);
-      }
-      return;
-    }
-
-    if (ch === "p" && !input && !busy) { setDialog({ type: "proj", sel: 0 }); return; }
-    if (ch === "a" && !input && !busy) { setDialog({ type: "agent", sel: 0 }); return; }
-    if (ch === "b" && !input) { setDialog({ type: "bill", sel: 0 }); return; }
-    if (ch === "h" && !input) { setDialog({ type: "history", sel: 0 }); return; }
-
-    if (key.pageUp) { setScrollOffset(o => o + 10); return; }
-    if (key.pageDown) { setScrollOffset(o => Math.max(0, o - 10)); return; }
-
-    if (key.return) {
-      const t = input.trim();
-      setInput("");
-      if (!t) return;
-      if (t.startsWith("/")) { runSlash(t); return; }
-      submitTask(t);
-      return;
-    }
-    if (key.backspace || key.delete) { setInput(i => i.slice(0, -1)); return; }
-    if (key.escape) { setInput(""); setFocusProj(null); return; }
-    if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
-      setInput(i => i + ch);
-    }
-  });
-
-  function dialogList(type) {
-    if (type === "proj") {
-      const st = companyState();
-      const items = st.pool.map(p => ({
-        label: `${p.status === "active" ? "🟢" : "⏸"} ${p.id} · 连败${p.fail_streak||0}`,
-        onPick: () => { setFocusProj(p.id); notice_("已聚焦项目: " + p.id); },
-      }));
-      items.push({ label: "🌐 全部项目(不聚焦)", onPick: () => { setFocusProj(null); notice_("已取消聚焦"); } });
-      return items;
-    }
-    if (type === "agent") {
-      return AGENTS.map(a => ({
-        label: `${a.name.padEnd(12)} ${a.desc}`,
-        onPick: () => { submitTask(`向${a.name}报到并简述你的职责`, a.id); },
-      }));
-    }
-    if (type === "bill") return [];
-    if (type === "history") return [];
-    return [];
-  }
-
-  function runSlash(t) {
-    const [cmd, ...rest] = t.split(" ");
-    const arg = rest.join(" ");
-    switch (cmd) {
-      case "/help": notice_("直接输入任务派活 · p 项目聚焦 · a 员工查看 · b 账单 · h 历史 · /new name 需求"); break;
-      case "/clear": setEntries([]); break;
-      case "/exit": exit(); break;
-      case "/new": {
-        const sp = arg.indexOf(" ");
-        if (sp < 1) { notice_("用法: /new <name> <需求描述>", true); break; }
-        bootstrapNew(arg.slice(0, sp), arg.slice(sp + 1));
-        break;
-      }
-      case "/engine":
-        try { execFileSync(path.join(os.homedir(), ".local/bin/opc-engine"), [arg || "status"], { timeout: 15000, encoding: "utf8" });
-              notice_("引擎: " + (arg === "stop" ? "已停止 ⏹" : "操作完成")); }
-        catch (e) { notice_("失败: " + e.message, true); }
-        break;
-      default: notice_("未知命令 " + cmd + "，试试 /help");
-    }
-  }
+  }, [initialDir, focusProj, handleEngineEvent]);
 
   function bootstrapNew(name, requirement) {
     name = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
     const dir = path.join(PROJECTS, name);
     fs.mkdirSync(dir, { recursive: true });
-    notice_(`🏗 「${name}」开工，完成后自动入池永动`);
+    notice_(`🏗 「${name}」开工（开发→测试→安全→文档→发布），完成后自动入池`);
     setBusy(true);
+    setEntries(prev => [...prev.slice(-199), { id: nid(), kind: "info",
+      text: `新项目 ${name} 全流水线建设中…` }]);
     const child = spawn("opc-agent",
       ["run",
-       `FULL LIFECYCLE for new project '${name}'. Requirement: ${requirement}. Work in cwd. Phases: product-manager -> architect -> developer -> tester(tests pass) -> security-auditor -> legal(MIT Hanley-Liu) -> docs-writer(README.md+README.zh-CN.md) -> designer(docs/assets/banner.svg) -> community files -> git init & push to github.com/Hanley-Liu/${name} (GITHUB_TOKEN set, insteadOf rewrite active) -> devops-release(topics+description). Decide everything yourself, never ask.`,
+       `FULL LIFECYCLE for new project '${name}'. Requirement: ${requirement}. Work in cwd. Phases: product-manager -> architect -> developer -> tester(tests pass) -> security-auditor -> legal(MIT Hanley-Liu) -> docs-writer(README.md+README.zh-CN.md) -> git init & push to github.com/Hanley-Liu/${name} (GITHUB_TOKEN set, insteadOf active) -> devops-release(topics+description). Decide everything yourself.`,
        "--dir", dir, "--agent", "build", "--json"],
       { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir });
     let buf = "";
@@ -346,154 +316,181 @@ function App({ initialDir }) {
         if (!pool.some(p => p.id === name))
           pool.push({ id: name, status: "active", interval_min: 60, priority: 5, last_run: 0, fail_streak: 0 });
         fs.writeFileSync(pf, JSON.stringify(pool, null, 1));
-        notice_(`🎉 「${name}」建成入池永动！`);
-      } else notice_(`「${name}」构建未完成(code=${code})`, true);
+        notice_(`🎉 「${name}」入池永动！`);
+      } else notice_(`「${name}」未完成(code=${code})`, true);
     });
+  }
+
+  function runSlash(t) {
+    const [cmd, ...rest] = t.split(" ");
+    const arg = rest.join(" ");
+    switch (cmd) {
+      case "/help": notice_("输入任务派活 · p聚焦项目 · a派给员工 · b账单 · h历史 · /new 建项 · x 展开最近工具输出"); break;
+      case "/clear": setEntries([]); break;
+      case "/exit": exit(); break;
+      case "/new": {
+        const sp = arg.indexOf(" ");
+        if (sp < 1) notice_("用法: /new <name> <需求>", true);
+        else bootstrapNew(arg.slice(0, sp), arg.slice(sp + 1));
+        break;
+      }
+      case "/focus": {
+        if (!arg) { setFocusProj(null); notice_("已取消聚焦"); break; }
+        const d = path.join(PROJECTS, arg);
+        if (fs.existsSync(d)) { setFocusProj(arg); notice_("聚焦: " + arg); }
+        else notice_("项目不存在: " + arg, true);
+        break;
+      }
+      default: notice_("未知命令 " + cmd + " · /help");
+    }
+  }
+
+  useInput((ch, key) => {
+    if (key.ctrl && ch === "c") { exit(); return; }
+
+    if (dialog) {
+      const list = dialogItems(dialog);
+      if (key.upArrow) setDialogSel(s => Math.max(0, s - 1));
+      if (key.downArrow) setDialogSel(s => Math.min(list.length - 1, s + 1));
+      if (key.escape) setDialog(null);
+      if (key.return) { list[dialogSel]?.onPick?.(); setDialog(null); setDialogSel(0); }
+      return;
+    }
+
+    if (ch === "p" && !input && !busy) { setDialog("proj"); setDialogSel(0); return; }
+    if (ch === "a" && !input && !busy) { setDialog("agent"); setDialogSel(0); return; }
+    if (ch === "b" && !input) { setDialog("bill"); setDialogSel(0); return; }
+    if (ch === "x") {
+      setExpandedIds(prev => {
+        const s = new Set(prev);
+        const toolIds = entries.filter(e => e.kind === "tool").map(e => e.id);
+        const last = toolIds[toolIds.length - 1];
+        if (last) { if (s.has(last)) s.delete(last); else s.add(last); }
+        return s;
+      });
+      return;
+    }
+    if (key.pageUp) { setScrollFromBottom(v => v + 10); return; }
+    if (key.pageDown) { setScrollFromBottom(v => Math.max(0, v - 10)); return; }
+
+    if (key.return) {
+      const t = input.trim();
+      setInput("");
+      if (!t) return;
+      if (t.startsWith("/")) { runSlash(t); return; }
+      submitTask(t);
+      return;
+    }
+    if (key.escape) { setInput(""); setNotice(""); return; }
+    if (key.backspace || key.delete) { setInput(i => i.slice(0, -1)); return; }
+    if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+      setInput(i => i + ch);
+    }
+  });
+
+  function dialogItems(type) {
+    if (type === "proj") {
+      const st = companyState();
+      const items = st.pool.map(p => ({
+        label: `${p.status === "active" ? "🟢" : "⏸"} ${p.id}`,
+        onPick: () => { setFocusProj(p.id); notice_("聚焦: " + p.id); },
+      }));
+      items.push({ label: "🌐 取消聚焦", onPick: () => { setFocusProj(null); notice_("已取消"); } });
+      return items;
+    }
+    if (type === "agent") {
+      return AGENTS.map(([id, name, desc]) => ({
+        label: `${name.padEnd(10)} ${desc}`,
+        onPick: () => submitTask(`向${name}报到并简述职责`, id),
+      }));
+    }
+    return [];
   }
 
   // ─────────── 渲染 ───────────
   const st = companyState();
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
+  const SIDEBAR_W = 30;
+  const MAIN_W = W - SIDEBAR_W;
+  const CHAT_H = Math.max(6, H - 7);
+
   const breath = tick % 2 === 0 ? "●" : "○";
   const engColor = busy ? C.warn : st.running ? C.success : C.muted;
 
-  // 可见窗口
-  const visibleH = H - 6;
-  const total = entries.length;
-  const end = Math.max(0, total - scrollOffset);
-  const start = Math.max(0, end - visibleH);
-  const visible = entries.slice(start, end);
+  // 渲染条目为行数组（带窗口与展开态）
+  const rendered = [];
+  const visEntries = entries.slice(-(CHAT_H + 20)); // 多取一些，裁剪时保量
+  for (const e of visEntries) {
+    const expanded = expandedIds.has(e.id);
+    const node = EntryView({ e, w: MAIN_W - 2, expanded });
+    rendered.push(<Box key={e.id}>{node}</Box>);
+  }
 
-  const header = lipglosslessRow([
-    ["⌬ OPC 永动公司", C.primary, true],
-    [`引擎 ${st.running ? "● 运转中" : "○ 停止"}`, st.running ? C.success : C.muted],
-    [`池 ${st.active.length}/${st.pool.length}`, C.text],
-    [`员工 ${AGENTS.length}`, C.text],
-    [focusProj ? `🎯 ${focusProj}` : "🌐 全部", C.warn],
-    [trunc(model, 30), C.muted],
-    [`↑↓${tok} tok`, C.muted],
-  ], W);
+  // 可视窗口：贴底或上翻
+  const from = Math.max(0, rendered.length - CHAT_H - scrollFromBottom);
+  const visible = rendered.slice(from, from + CHAT_H);
 
   return (
-    <Box flexDirection="column" height={H}>
-      <Box borderStyle={{ topLeft: "╭", top: "─", topRight: "╮", left: "│", right: "│", bottomLeft: "╰", bottom: "─", bottomRight: "╯" }}
+    <Box flexDirection="column" width={W} height={H}>
+      {/* Header */}
+      <Box borderStyle={{topLeft:"╭",top:"─",topRight:"╮",left:"│",right:"│",bottomLeft:"╰",bottom:"─",bottomRight:"╯"}}
            borderColor={C.border} width={W}>
-        <Text>{header}</Text>
+        <Text>
+          {" "}
+          <Text bold color={C.primary}>⌬ OPC</Text>
+          <Text color={engColor}> [{breath} 引擎:{busy?"工作中":st.running?"运转中":"停止"}]</Text>
+          <Text color={C.text}> [池 {st.active.length}/{st.pool.length}]</Text>
+          <Text color={C.muted}> [员工 {AGENTS.length}]</Text>
+          <Text color={C.warn}> [↑{tok.p} ↓{tok.c}]</Text>
+          <Text dimColor> {trunc(model, 24)}</Text>
+          {focusProj ? <Text color={C.warn}> [🎯{focusProj}]</Text> : null}
+        </Text>
       </Box>
 
-      {/* 主区：事件流 */}
-      <Box flexDirection="column" height={visibleH} paddingX={1}>
-        {start > 0 ? <Text dimColor>  ↑↑ 更早 ({start} 条，PgUp 翻看)</Text> : null}
-        {visible.map(e => <Entry key={e.id} e={e} w={W - 4} />)}
-        {total === 0 ? <Text dimColor>  空空如也。输入任务派活，或按 h 看历史。</Text> : null}
-        {scrollOffset > 0 ? null : busy ? (
-          <Text color={C.warn}>  ⟳ 编排中…</Text>
-        ) : null}
+      {/* 双栏主体 */}
+      <Box flexDirection="row" height={CHAT_H}>
+        {/* 左：对话 */}
+        <Box flexDirection="column" width={MAIN_W} paddingX={1}>
+          {visible}
+          {busy ? <Text color={C.warn} paddingLeft={namePad()}>  ⟳ 编排中…</Text> : null}
+          {scrollFromBottom > 0 ? <Text dimColor>  ↕ 上翻 {scrollFromBottom} 行 (PgDn 回底)</Text> : null}
+        </Box>
+        {/* 分隔线 */}
+        <Box width={1}><Text color={C.border}>{"│".repeat(Math.max(1, CHAT_H))}</Text></Box>
+        {/* 右：侧栏 */}
+        <Box flexDirection="column" width={SIDEBAR_W - 1} paddingX={1}>
+          <Text bold color={C.primary}>📦 项目池</Text>
+          {st.pool.map(p => (
+            <Text key={p.id} color={p.status==="active"?C.success:C.muted}>
+              {" "}{p.status==="active"?"🟢":"⏸"} {trunc(p.id, SIDEBAR_W-10)}
+            </Text>
+          ))}
+          {!st.pool.length ? <Text dimColor>  (空)</Text> : null}
+          <Text> </Text>
+          <Text bold color={C.primary}>👥 员工</Text>
+          {AGENTS.slice(0, Math.max(0, CHAT_H - 8 - st.pool.length * 1)).map(([id, name]) => (
+            <Text key={id} color={C.muted}>{"  "}{trunc(name, SIDEBAR_W-8)}</Text>
+          ))}
+          <Box marginTop={1}><Text dimColor>💰 ↑{tok.p} ↓{tok.c}</Text></Box>
+          {notice ? <Text color={C.warn}>{trunc(notice, SIDEBAR_W-2)}</Text> : null}
+        </Box>
       </Box>
 
       {/* 输入 */}
       <Box borderStyle="round" borderColor={C.border} paddingX={1} width={W}>
         <Text color={C.primary} bold>{"❯ "}</Text>
         <Text color={C.text}>{input}</Text>
-        {!busy ? <Text dimColor>_</Text> : null}
+        {!busy ? <Text dimColor>_</Text> : <Text color={C.warn}>⟳</Text>}
       </Box>
-      {/* 提示条 */}
       <Text dimColor>
-        {" Enter发送 · p项目 a员工 b账单 h历史 /new建项 · PgUp/PgDn翻页 · Ctrl+C 退出"}
+        {" Enter 发送 · x 展开 · PgUp/PgDn 翻页 · p 项目 · a 员工 · b 账单 · h 历史 · Ctrl+C 退出"}
       </Text>
-
-      {dialog ? (
-        dialog.type === "bill" ? <BillDialog onClose={() => setDialog(null)} width={W} /> :
-        dialog.type === "history" ? <HistoryDialog onClose={() => setDialog(null)} width={W} /> :
-        <Dialog title={dialog.type === "proj" ? "📦 选择聚焦项目" : "👤 选择员工"}
-                items={dialogList(dialog.type)} sel={dialog.sel} width={W} />
-      ) : null}
     </Box>
   );
 }
 
-function lipglosslessRow(segments, width) {
-  // 简易分段着色行
-  const out = segments.map(([text, color, bold]) => {
-    const style = bold ? "\x1b[1m" : "";
-    return `\x1b[38;2;${hexToRgb(color)}m${style}${text}\x1b[0m`;
-  }).join(dimSep());
-  return " " + truncAnsi(out, width - 2);
-}
-function dimSep() { return "\x1b[38;2;85;95;137m · \x1b[0m"; }
-function hexToRgb(hex) {
-  const h = hex.replace("#", "");
-  const n = parseInt(h, 16);
-  return `${(n>>16)&255};${(n>>8)&255};${n&255}`;
-}
-function truncAnsi(s, w) {
-  // ANSI 感知截断（简化：只算可见字符）
-  let visible = 0, out = "", i = 0;
-  while (i < s.length && visible < w) {
-    if (s[i] === "\x1b") { while (i < s.length && !/[a-zA-Z]/.test(s[i])) i++; i++; continue; }
-    out += s[i]; visible++; i++;
-  }
-  return out;
-}
-
-// ─────────── 账单/历史 对话框 ───────────
-function BillDialog({ onClose, width }) {
-  const events = readEventsLocal(6000);
-  const byModel = {};
-  for (const e of events) {
-    if (e.type !== "llm") continue;
-    const key = e.model || "(unknown)";
-    const m = byModel[key] ||= { calls: 0, p: 0, c: 0 };
-    m.calls++; m.p += e.prompt_tokens || 0; m.c += e.completion_tokens || 0;
-  }
-  const rows = Object.values(byModel).sort((a,b)=>b.calls-a.calls);
-  const tot = rows.reduce((s,m)=>s+m.p+m.c, 0);
-  return (
-    <Box position="absolute" justifyContent="center" width={width} marginTop={2}>
-      <Box flexDirection="column" borderStyle="round" borderColor={C.primary}
-           paddingX={1} width={Math.min(76, width-6)} backgroundColor={C.panelBg}>
-        <Text bold color={C.primary}> 📊 Token 账单</Text>
-        {rows.map((m,i) => (
-          <Text key={i} color={C.text}>  {trunc(m.model,34)}  {m.calls} 次  ↑{m.p.toLocaleString()} ↓{m.c.toLocaleString()}</Text>
-        ))}
-        {rows.length===0 ? <Text dimColor>  暂无调用</Text> :
-          <Text dimColor>  合计 {tot.toLocaleString()} tokens</Text>}
-        <Text dimColor>{" Esc 关闭"}</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function HistoryDialog({ onClose, width }) {
-  const events = readEventsLocal(4000)
-    .filter(e => ["run-done","iteration-done","iteration-failed","run-start"].includes(e.type))
-    .slice(-18).reverse();
-  return (
-    <Box position="absolute" justifyContent="center" width={width} marginTop={2}>
-      <Box flexDirection="column" borderStyle="round" borderColor={C.primary}
-           paddingX={1} width={Math.min(80, width-6)} backgroundColor={C.panelBg}>
-        <Text bold color={C.primary}> 📜 任务历史</Text>
-        {events.map((e,i) => (
-          <Text key={i} color={e.type.includes("fail") ? C.error : C.text}>
-            {(e.ts||"").slice(5,19)} [{e.project||e.agent}] {e.type.replace("iteration-","")}{" "}
-            {trunc(e.summary || e.output || "", 44)}
-          </Text>
-        ))}
-        {events.length===0 ? <Text dimColor>  暂无</Text> : null}
-        <Text dimColor>{" Esc 关闭"}</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function readEventsLocal(limit) {
-  try {
-    const f = path.join(os.homedir(), ".local/share/opencode/company/activity.jsonl");
-    return fs.readFileSync(f, "utf8").trim().split("\n").filter(Boolean)
-      .slice(-limit).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-  } catch { return []; }
-}
+function namePad() { return 4; }
 
 // ─────────── 启动 ───────────
 const idx = process.argv.indexOf("--dir");
@@ -501,9 +498,3 @@ const dirArg = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();
 if (!fs.existsSync(dirArg)) { console.error("目录不存在:", dirArg); process.exit(1); }
 
 render(<App initialDir={dirArg} />, { patchConsole: false });
-function buildStatus(busy, st, model, tok, breath, engColor) {
-  const seg = (t,c) => `\x1b[38;2;${hexToRgb(c)}m${t}\x1b[0m`;
-  return " " + seg(breath, engColor)
-    + seg(` 引擎:${st.running?"运转中":"停止"} · 池:${st.active.length}/${st.pool.length}`, "#565f89")
-    + seg(` · ${trunc(model,28)} · ↑↓${tok} tok · Enter 派活`, "#565f89");
-}
