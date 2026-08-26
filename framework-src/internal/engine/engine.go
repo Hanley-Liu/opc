@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"os"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -16,14 +17,23 @@ import (
 
 // Engine 工作流引擎 —— 纯标准库
 type Engine struct {
-	mu       sync.RWMutex
-	state    string // stopped running paused
-	cfg      *schema.Config
-	runtime  *agent.Runtime
-	executor *tool.Executor
-	history  *History
-	session  *Session
-	llm      *llm.Client
+	mu        sync.RWMutex
+	state     string // stopped running paused
+	cfg       *schema.Config
+	runtime   *agent.Runtime
+	executor  *tool.Executor
+	history   *History
+	session   *Session
+	llm       *llm.Client
+	OnEvent   func(e schema.ActivityEvent) // 实时事件回调（TUI 对话流用）
+}
+
+// emit 同步写审计日志 + 按序推送实时回调（顺序即真相）
+func (e *Engine) emit(ev schema.ActivityEvent) {
+	e.history.Record(ev)
+	if e.OnEvent != nil {
+		e.OnEvent(ev)
+	}
 }
 
 // New 创建引擎
@@ -58,7 +68,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	e.history.Start(ctx)
-	e.record("", "system", "run-start", "引擎启动", nil)
+	e.emit(schema.ActivityEvent{Timestamp: time.Now(), ProjectID: "system", AgentID: "engine", Type: "run-start", Output: "引擎启动"})
 	return nil
 }
 
@@ -109,7 +119,12 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 	runID := fmt.Sprintf("%08x", time.Now().UnixNano()%0xFFFFFFFF)
 	project := base(workingDir)
 
-	e.history.Record(schema.ActivityEvent{
+	// 守卫：目录不存在直接报错，绝不让 agent 全盘扫描找路
+	if st, err := os.Stat(workingDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("工作目录不存在: %s（已阻止全盘搜索）", workingDir)
+	}
+
+	e.emit(schema.ActivityEvent{
 		Timestamp: time.Now(), RunID: runID, ProjectID: project,
 		AgentID: agentID, Type: "run-start", Input: task, Status: "pending",
 	})
@@ -128,7 +143,7 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 		resp, err := e.llm.Chat(ctx, messages, e.llm.DefaultTools())
 		if err != nil {
 			errModel := ""
-			e.history.Record(schema.ActivityEvent{
+			e.emit(schema.ActivityEvent{
 				Timestamp: time.Now(), RunID: runID, ProjectID: project,
 				AgentID: agentID, Type: "llm-error", Model: errModel,
 				Error: err.Error(), Duration: ms(start),
@@ -136,7 +151,7 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 			return fmt.Errorf("step %d: %w", step, err)
 		}
 
-		e.history.Record(schema.ActivityEvent{
+		e.emit(schema.ActivityEvent{
 			Timestamp: time.Now(), RunID: runID, ProjectID: project,
 			AgentID: agentID, Type: "llm", Model: resp.Model,
 			Input: fmt.Sprintf("step %d", step),
@@ -148,7 +163,7 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 		totalTokens.Total += resp.PromptTok + resp.ComplTok
 
 		if len(resp.ToolCalls) == 0 {
-			e.history.Record(schema.ActivityEvent{
+			e.emit(schema.ActivityEvent{
 				Timestamp: time.Now(), RunID: runID, ProjectID: project,
 				AgentID: agentID, Type: "run-done",
 				Output: truncate(resp.Content, 400), Tokens: totalTokens,
@@ -164,7 +179,7 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 			tStart := time.Now()
 			out, err := e.executor.Execute(ctx, tc.Function.Name, args)
 			ok := err == nil
-			e.history.Record(schema.ActivityEvent{
+			e.emit(schema.ActivityEvent{
 				Timestamp: time.Now(), RunID: runID, ProjectID: project,
 				AgentID: agentID, Type: "tool", Tool: tc.Function.Name,
 				Input: truncate(tc.Function.Arguments, 200), Output: truncate(out, 300),
@@ -175,14 +190,6 @@ func (e *Engine) RunTask(ctx context.Context, agentID, task, workingDir string) 
 		}
 	}
 	return fmt.Errorf("达到最大步数 %d", maxSteps)
-}
-
-// record 内部快捷记录
-func (e *Engine) record(project, agentID, typ, detail string, _ map[string]any) {
-	e.history.Record(schema.ActivityEvent{
-		Timestamp: time.Now(), ProjectID: project, AgentID: agentID,
-		Type: typ, Output: detail,
-	})
 }
 
 // helpers
