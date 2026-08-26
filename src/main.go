@@ -16,7 +16,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"flag"
+
 	"fmt"
 	"io"
 	"net/http"
@@ -965,35 +965,47 @@ func listModels() {
 }
 
 func cmdRun(args []string) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	agentName := fs.String("agent", "build", "agent to run")
-	dir := fs.String("dir", ".", "working directory")
-	model := fs.String("model", "", "override model PROVIDER/MODEL")
-	maxSteps := fs.Int("max-steps", maxStepsDefault, "cap agentic steps")
-	_ = maxSteps
-	if fs.Parse(args) != nil || fs.NArg() < 1 {
+	// manual parse: flags may appear ANYWHERE (stdlib flag stops at 1st positional)
+	var agentName, dir, model string
+	maxSteps := maxStepsDefault
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--agent", "-agent":
+			if i+1 < len(args) { agentName = args[i+1]; i++ }
+		case "--dir", "-dir":
+			if i+1 < len(args) { dir = args[i+1]; i++ }
+		case "--model", "-model":
+			if i+1 < len(args) { model = args[i+1]; i++ }
+		case "--max-steps", "-max-steps":
+			if i+1 < len(args) { fmt.Sscanf(args[i+1], "%d", &maxSteps); i++ }
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+	if len(positional) < 1 {
 		usage()
 		os.Exit(2)
 	}
-	task := fs.Arg(0)
-	abs, err := filepath.Abs(*dir)
+	task := positional[0]
+	abs, err := filepath.Abs(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "bad dir:", err)
 		os.Exit(1)
 	}
 	start := time.Now()
 	agents := loadAgents()
-	a := agents[*agentName]
+	a := agents[agentName]
 	if a == nil {
-		fmt.Fprintf(os.Stderr, "unknown agent %q; have: ", *agentName)
+		fmt.Fprintf(os.Stderr, "unknown agent %q; have: ", agentName)
 		for n := range agents {
 			fmt.Fprint(os.Stderr, n+" ")
 		}
 		fmt.Fprintln(os.Stderr)
 		os.Exit(1)
 	}
-	if *model != "" {
-		a.Model = *model
+	if model != "" {
+		a.Model = model
 	}
 	pm := providers()
 	logger := func(f string, xs ...interface{}) {
@@ -1001,7 +1013,7 @@ func cmdRun(args []string) {
 	}
 	out, err := agentLoop(pm, agents, a, task, abs, 0, logger)
 	dur := time.Since(start).Round(time.Second)
-	appendRunLog(*agentName, task, out, err, dur)
+	appendRunLog(agentName, task, out, err, dur)
 	if err != nil {
 		fmt.Printf("\x1b[31m[error]\x1b[0m %v\n", err)
 	}

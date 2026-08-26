@@ -1,0 +1,203 @@
+#!/bin/sh
+# opc-engine — perpetual project-pool engine (the heartbeat of the company).
+# IRON RULES:
+#   1. PERPETUAL: every pool project loops [check→improve→test→ship→metrics] forever.
+#   2. NO SELF-DIRECTION: engine NEVER invents new projects. Only iterates the pool.
+#   3. ZERO DECISION BLOCKING: all choices rule-based + logged; human only watches/stops.
+#
+# Pool file: ~/.local/share/opencode/company/pool.json
+#   [{"id":"todo-app","status":"active","priority":5,"interval_min":60,"last_run":0,"fail_streak":0}, ...]
+# Control:  ~/.local/share/opencode/company/engine.json  {"running":true}
+# Events:   ~/.local/share/opencode/company/events.jsonl (dashboard reads this)
+
+COMPANY="$HOME/.local/share/opencode/company"
+POOL="$COMPANY/pool.json"
+ENGINE="$COMPANY/engine.json"
+EVENTS="$COMPANY/events.log"
+LOCK="/tmp/opc-engine.lock"
+
+mkdir -p "$COMPANY/logs" "$COMPANY/board" "$COMPANY/reports"
+
+log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$COMPANY/logs/engine.log"; }
+event() { # event <project> <type> <detail>
+  printf '{"ts":"%s","project":"%s","type":"%s","detail":"%s"}\n' \
+    "$(date -u '+%FT%TZ')" "$1" "$2" "$(printf '%s' "$3" | sed 's/"/\\"/g')" >> "$EVENTS"
+}
+
+json_get() { # json_get <file> — python helper (python3 is on every modern linux; fallback note)
+  python3 - "$1" << 'PYEOF'
+import json,sys
+try: print(json.dumps(json.load(open(sys.argv[1]))))
+except Exception: print("[]")
+PYEOF
+}
+
+pool_items() { python3 - << 'PYEOF'
+import json,os,time
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+try: pool=json.load(open(p))
+except Exception: pool=[]
+now=time.time()
+out=[]
+for it in sorted(pool,key=lambda x:-x.get("priority",5)):
+    if it.get("status","active")!="active": continue
+    if now - it.get("last_run",0) < it.get("interval_min",60)*60: continue
+    out.append(it["id"])
+print("\n".join(out))
+PYEOF
+}
+
+mark_run() { # mark_run <id> <ok|fail> — updates last_run, fail_streak, auto-escalate flag
+  python3 - "$1" "$2" << 'PYEOF'
+import json,os,sys,time
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+pid,res=sys.argv[1],sys.argv[2]
+try: pool=json.load(open(p))
+except Exception: pool=[]
+for it in pool:
+    if it["id"]==pid:
+        it["last_run"]=time.time()
+        fs=it.get("fail_streak",0)
+        fs=0 if res=="ok" else fs+1
+        it["fail_streak"]=fs
+        # escalation rule: 3+ consecutive failures -> next run uses strong model
+        it["escalate"]=fs>=3
+        if res=="ok" and "escalate" in it: it.pop("escalate")
+        break
+json.dump(pool,open(p,"w"),indent=1)
+PYEOF
+}
+
+set_running() {
+  printf '{"running":%s,"updated":"%s"}\n' "$1" "$(date -u +%FT%TZ)" > "$ENGINE"
+}
+
+is_running() {
+  [ -f "$ENGINE" ] && grep -q '"running": *true' "$ENGINE" 2>/dev/null
+}
+
+run_project() { # run_project <id> — one perpetual iteration for a project
+  pid="$1"
+  PROJ_DIR="$HOME/.local/share/opencode/projects/$pid"
+  [ -d "$PROJ_DIR" ] || PROJ_DIR="$HOME/.local/share/opencode/projects"
+  ESC=$(python3 -c "
+import json,os
+try:
+  pool=json.load(open(os.path.expanduser('~/.local/share/opencode/company/pool.json')))
+  print('yes' if any(i.get('escalate') for i in pool if i['id']=='$pid') else 'no')
+except Exception: print('no')")
+  MODEL_FLAG=""
+  [ "$ESC" = "yes" ] && MODEL_FLAG="--model deepseek/deepseek-v4-flash-vision-exp"
+  log "== ITERATE $pid (escalate=$ESC) =="
+  event "$pid" "iteration-start" "perpetual loop turn"
+  AGENT="opc-agent"; command -v opc-agent >/dev/null 2>&1 || AGENT="opencode"
+  OUT=$(timeout 1800 "$AGENT" run "PERPETUAL ITERATION for project '$pid'. Iron rules: never create new projects; pick the highest-value small improvement yourself (zero decision blocking - decide by rule: correctness bugs > broken tests > UX gaps > docs > perf), implement it, test it, ship via github-agent if GITHUB available, update CHANGELOG. If nothing needs improvement, polish something small anyway. Log reasoning in one line at start." \
+    --dir "$PROJ_DIR" --agent build $MODEL_FLAG 2>&1 | tail -5)
+  RC=$?
+  if [ $RC -eq 0 ]; then
+    mark_run "$pid" ok
+    event "$pid" "iteration-done" "$(printf '%s' "$OUT" | head -c 150)"
+    log "== DONE $pid =="
+  else
+    mark_run "$pid" fail
+    event "$pid" "iteration-failed" "exit=$RC $(printf '%s' "$OUT" | head -c 120)"
+    log "== FAIL $pid exit=$RC =="
+  fi
+}
+
+collect_metrics() { # every N cycles refresh star data (analyst light-weight inline)
+  event "system" "metrics-tick" "refreshing repo stats"
+  "$HOME/.local/bin/opc-agent" run "Collect GitHub metrics for user Hanley-Liu via API using GITHUB_TOKEN env var. Append timestamped snapshot to ~/.local/share/opencode/company/metrics.json (read-modify-write). Keep it under 30 seconds of work." --dir "$HOME" --agent analyst --max-steps 10 >/dev/null 2>&1 || true
+}
+
+cycle() {
+  is_running || return 0
+  NEXT=$(pool_items | head -1)
+  if [ -z "$NEXT" ]; then
+    sleep 60
+    return 0
+  fi
+  run_project "$NEXT"
+  CYCLE_COUNT=$((CYCLE_COUNT+1))
+  if [ $((CYCLE_COUNT % 6)) -eq 0 ]; then collect_metrics; fi
+}
+
+# ------------- commands -------------
+case "${1:-}" in
+  start)
+    if [ -f "$LOCK" ] && kill -0 "$(cat $LOCK)" 2>/dev/null; then echo "engine already running (pid $(cat $LOCK))"; exit 0; fi
+    set_running true
+    echo $$ > "$LOCK"
+    nohup "$0" _loop </dev/null >>"$COMPANY/logs/engine-stdout.log" 2>&1 &
+    echo "engine started (pid $$)"
+    ;;
+  stop)
+    set_running false
+    [ -f "$LOCK" ] && kill "$(cat $LOCK)" 2>/dev/null && rm -f "$LOCK"
+    pkill -f "opc-engine _loop" 2>/dev/null
+    echo "engine stopped"
+    ;;
+  pause-project)   # pause-project <id>
+    python3 - "$2" << 'PYEOF'
+import json,os,sys
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+pool=json.load(open(p))
+for it in pool:
+    if it["id"]==sys.argv[1]: it["status"]="paused"
+json.dump(pool,open(p,"w"),indent=1)
+PYEOF
+    event "$2" "paused" "by human"; echo "paused $2";;
+  resume-project)
+    python3 - "$2" << 'PYEOF'
+import json,os,sys
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+pool=json.load(open(p))
+for it in pool:
+    if it["id"]==sys.argv[1]: it["status"]="active"
+json.dump(pool,open(p,"w"),indent=1)
+PYEOF
+    event "$2" "resumed" "by human"; echo "resumed $2";;
+  kill-project)    # remove from pool entirely
+    python3 - "$2" << 'PYEOF'
+import json,os,sys
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+pool=json.load(open(p))
+pool=[i for i in pool if i["id"]!=sys.argv[1]]
+json.dump(pool,open(p,"w"),indent=1)
+PYEOF
+    event "$2" "killed" "removed from pool by human"; echo "killed $2";;
+  add-project)     # add-project <id> [interval_min] [priority]
+    python3 - "$2" "${3:-60}" "${4:-5}" << 'PYEOF'
+import json,os,sys,time
+p=os.path.expanduser("~/.local/share/opencode/company/pool.json")
+try: pool=json.load(open(p))
+except Exception: pool=[]
+pid=sys.argv[1]
+if not any(i["id"]==pid for i in pool):
+    pool.append({"id":pid,"status":"active","interval_min":int(sys.argv[2]),"priority":int(sys.argv[3]),"last_run":0,"fail_streak":0})
+    json.dump(pool,open(p,"w"),indent=1)
+    print("added",pid)
+else: print("already in pool",pid)
+PYEOF
+    event "$2" "added" "human approved project into pool";;
+  status)
+    if is_running; then echo "engine: RUNNING"; else echo "engine: STOPPED"; fi
+    cat "$POOL" 2>/dev/null | python3 -c "
+import json,sys,time
+for i in json.load(sys.stdin):
+    lr=time.strftime('%H:%M',time.localtime(i.get('last_run',0))) if i.get('last_run') else 'never'
+    print(f\"  {i['id']:16} {i.get('status','active'):8} fails={i.get('fail_streak',0)} last={lr}\")" 2>/dev/null
+    ;;
+  _loop)
+    CYCLE_COUNT=0
+    log "engine loop started pid=$$"
+    while :; do
+      is_running || break
+      cycle
+    done
+    log "engine loop exited"
+    ;;
+  *)
+    echo "usage: opc-engine start|stop|status|add-project ID|pause-project ID|resume-project ID|kill-project ID"
+    ;;
+esac
