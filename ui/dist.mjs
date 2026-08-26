@@ -61,6 +61,23 @@ function trimLines(s, maxLines) {
   if (lines.length <= maxLines) return s;
   return lines.slice(0, maxLines).join("\n") + "\n\u2026 (+" + (lines.length - maxLines) + " \u884C\uFF0C\u5168\u6587\u89C1\u5BA1\u8BA1\u65E5\u5FD7)";
 }
+var ROSTER = {
+  "build": { name: "Sisyphus", role: "COO\xB7\u7F16\u6392", color: "#bb9af7" },
+  "product-manager": { name: "\u4EA7\u54C1\u7ECF\u7406", role: "\u9700\u6C42PRD", color: "#9ece6a" },
+  "architect": { name: "\u67B6\u6784\u5E08", role: "\u7CFB\u7EDF\u8BBE\u8BA1", color: "#7dcfff" },
+  "developer": { name: "\u5F00\u53D1\u8005", role: "\u7F16\u7801\u5B9E\u73B0", color: "#e0af68" },
+  "tester": { name: "\u6D4B\u8BD5\u5458", role: "\u8D28\u91CF\u4FDD\u8BC1", color: "#ff9e64" },
+  "security-auditor": { name: "\u5B89\u5168\u5BA1\u8BA1", role: "\u6F0F\u6D1E\u626B\u63CF", color: "#f7768e" },
+  "docs-writer": { name: "\u6587\u6863\u5DE5\u7A0B\u5E08", role: "README", color: "#73daca" },
+  "marketing-growth": { name: "\u589E\u957F\u8425\u9500", role: "\u6DA8\u661F\u63A8\u5E7F", color: "#ff007f" },
+  "github-agent": { name: "\u53D1\u5E03\u5B98", role: "git\u63A8\u9001", color: "#c0caf5" },
+  "devops-release": { name: "\u53D1\u5E03\u5DE5\u7A0B", role: "\u7248\u672CCI", color: "#2ac3de" },
+  "analyst": { name: "\u5206\u6790\u5E08", role: "\u6570\u636E\u6D1E\u5BDF", color: "#b4f9f8" },
+  "legal-compliance": { name: "\u6CD5\u52A1", role: "\u5408\u89C4", color: "#a9b1d6" }
+};
+function rosterOf(agentId) {
+  return ROSTER[agentId] || { name: agentId || "\u516C\u53F8", role: "", color: "#7aa2f7" };
+}
 function prettyParams(raw) {
   try {
     const m = JSON.parse(raw);
@@ -107,10 +124,11 @@ function lipglossText(text, color) {
 function EntryView({ e, w, expanded }) {
   const nameW = 4;
   if (e.kind === "user") {
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", marginBottom: 0 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.secondary, bold: true }, "\u4F60"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2500\u2500")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, wrap(e.text, Math.max(20, w - nameW))));
+    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", marginBottom: 0 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.secondary, bold: true }, "\u{1F451} CEO"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2500\u2500")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, wrap(e.text, Math.max(20, w - nameW))));
   }
   if (e.kind === "assistant") {
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "Si"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2500\u2500 " + trunc(e.model || "", 22) + " \u2191" + (e.ptok || 0) + " \u2193" + (e.ctok || 0) + " tok")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, mdLite(e.text, Math.max(20, w - nameW), C.text)));
+    const r = rosterOf(e.agent);
+    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: r.color, bold: true }, "\u258C " + r.name), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " " + r.role + " \u2500\u2500 " + trunc(e.model || "", 20) + " \u2191" + (e.ptok || 0) + " \u2193" + (e.ctok || 0) + " tok")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, mdLite(e.text, Math.max(20, w - nameW), C.text)));
   }
   if (e.kind === "info") {
     return /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\xB7 ", e.text));
@@ -122,7 +140,7 @@ function EntryView({ e, w, expanded }) {
     const mark = e.hasResult ? e.ok ? "\u2713" : "\u2716" : "\u27F3";
     const markColor = e.hasResult ? e.ok ? C.success : C.error : C.warn;
     const head = `${mark} \u26A1 ${e.tool}: ${trunc(prettyParams(e.args), Math.max(16, w - nameW - 14))}`;
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: markColor, bold: true }, mark + " "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, e.tool, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))), expanded ? null : e.output && !e.isErr ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2713") : null), expanded ? /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: 2 }, String(e.output ?? "").split("\n").slice(0, MAX_RESULT).map(
+    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(rosterOf(e.agent).name, 8) + " "), /* @__PURE__ */ React.createElement(Text, { color: markColor, bold: true }, mark + " "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, e.tool, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))), expanded ? null : e.output && !e.isErr ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2713") : null), expanded ? /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: 2 }, String(e.output ?? "").split("\n").slice(0, MAX_RESULT).map(
       (l, i) => /* @__PURE__ */ React.createElement(Text, { key: i, color: e.isErr ? C.error : C.muted }, "\u2502 ", trunc(l, w - nameW - 6))
     )) : null);
   }
@@ -186,7 +204,7 @@ function App({ initialDir }) {
         setTok((t) => ({ p: t.p + (ev.prompt_tokens || 0), c: t.c + (ev.completion_tokens || 0) }));
         break;
       case "tool":
-        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false };
+        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false, agent: ev.agent };
         break;
       case "result":
         if (pendingToolRef.current) {
@@ -215,6 +233,7 @@ function App({ initialDir }) {
           id: nid(),
           kind: "assistant",
           text: body,
+          agent: ev.agent,
           model: ev.model,
           ptok: tk.prompt || 0,
           ctok: tk.completion || 0

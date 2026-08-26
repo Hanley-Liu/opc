@@ -50,6 +50,24 @@ function trimLines(s, maxLines) {
   return lines.slice(0, maxLines).join("\n") + "\n… (+" + (lines.length - maxLines) + " 行，全文见审计日志)";
 }
 
+const ROSTER = {
+  "build":              { name: "Sisyphus",  role: "COO·编排",  color: "#bb9af7" },
+  "product-manager":    { name: "产品经理",   role: "需求PRD",   color: "#9ece6a" },
+  "architect":          { name: "架构师",     role: "系统设计",   color: "#7dcfff" },
+  "developer":          { name: "开发者",     role: "编码实现",   color: "#e0af68" },
+  "tester":             { name: "测试员",     role: "质量保证",   color: "#ff9e64" },
+  "security-auditor":   { name: "安全审计",   role: "漏洞扫描",   color: "#f7768e" },
+  "docs-writer":        { name: "文档工程师", role: "README",    color: "#73daca" },
+  "marketing-growth":   { name: "增长营销",   role: "涨星推广",   color: "#ff007f" },
+  "github-agent":       { name: "发布官",     role: "git推送",    color: "#c0caf5" },
+  "devops-release":     { name: "发布工程",   role: "版本CI",    color: "#2ac3de" },
+  "analyst":            { name: "分析师",     role: "数据洞察",   color: "#b4f9f8" },
+  "legal-compliance":   { name: "法务",      role: "合规",      color: "#a9b1d6" },
+};
+function rosterOf(agentId) {
+  return ROSTER[agentId] || { name: agentId || "公司", role: "", color: "#7aa2f7" };
+}
+
 function prettyParams(raw) {
   try {
     const m = JSON.parse(raw);
@@ -101,7 +119,7 @@ function EntryView({ e, w, expanded }) {
   if (e.kind === "user") {
     return (
       <Box flexDirection="column" marginBottom={0}>
-        <Text><Text color={C.secondary} bold>{"你"}</Text><Text dimColor>{" ──"}</Text></Text>
+        <Text><Text color={C.secondary} bold>{"👑 CEO"}</Text><Text dimColor>{" ──"}</Text></Text>
         <Box paddingLeft={nameW} flexDirection="column">
           {wrap(e.text, Math.max(20, w - nameW))}
         </Box>
@@ -109,11 +127,12 @@ function EntryView({ e, w, expanded }) {
     );
   }
   if (e.kind === "assistant") {
+    const r = rosterOf(e.agent);
     return (
       <Box flexDirection="column">
         <Text>
-          <Text color={C.primary} bold>{"Si"}</Text>
-          <Text dimColor>{" ── " + trunc(e.model || "", 22) + " ↑" + (e.ptok||0) + " ↓" + (e.ctok||0) + " tok"}</Text>
+          <Text color={r.color} bold>{"▌ " + r.name}</Text>
+          <Text dimColor>{" " + r.role + " ── " + trunc(e.model || "", 20) + " ↑" + (e.ptok||0) + " ↓" + (e.ctok||0) + " tok"}</Text>
         </Text>
         <Box paddingLeft={nameW} flexDirection="column">
           {mdLite(e.text, Math.max(20, w - nameW), C.text)}
@@ -134,6 +153,7 @@ function EntryView({ e, w, expanded }) {
     return (
       <Box flexDirection="column" paddingLeft={nameW}>
         <Text>
+          <Text color={C.muted}>{trunc(rosterOf(e.agent).name, 8) + " "}</Text>
           <Text color={markColor} bold>{mark + " "}</Text>
           <Text color={C.tool}>{e.tool} </Text>
           <Text dimColor>{trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))}</Text>
@@ -205,7 +225,7 @@ function App({ initialDir }) {
         setTok(t => ({ p: t.p + (ev.prompt_tokens||0), c: t.c + (ev.completion_tokens||0) }));
         break;
       case "tool":
-        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false };
+        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false, agent: ev.agent };
         break;
       case "result":
         if (pendingToolRef.current) {
@@ -228,6 +248,7 @@ function App({ initialDir }) {
         setEntries(prev => [...prev.slice(-199), {
           id: nid(), kind: "assistant",
           text: body,
+          agent: ev.agent,
           model: ev.model, ptok: tk.prompt||0, ctok: tk.completion||0,
         }]);
         setTok(t => ({ p: t.p + (tk.prompt||0), c: t.c + (tk.completion||0) }));
