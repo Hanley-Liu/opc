@@ -2,9 +2,8 @@
 
 // opc.jsx
 import React, { useState, useEffect, useCallback } from "react";
-import { render, Static, Box, Text, useInput, useApp } from "ink";
-import { spawn } from "node:child_process";
-import readline from "node:readline";
+import { render, Box, Text, useInput, useApp } from "ink";
+import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -99,8 +98,8 @@ function resolveDir(task, initialDir) {
     const pool = readJSON(path.join(COMPANY, "pool.json"), []);
     for (const p of pool) {
       if (task.toLowerCase().includes(p.id.toLowerCase())) {
-        const dir2 = path.join(PROJECTS, p.id);
-        if (fs.existsSync(dir2)) return dir2;
+        const dir = path.join(PROJECTS, p.id);
+        if (fs.existsSync(dir)) return dir;
       }
     }
   } catch {
@@ -134,6 +133,216 @@ function App({ initialDir }) {
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
   const [tok, setTok] = useState(0);
   const [tick, setTick] = useState(0);
+  const info = (text) => ({ id: nid(), type: "info", text });
+  let pendingToolRef = null;
+  const flushPending = () => {
+    if (pendingToolRef) {
+      push({ ...pendingToolRef, hasResult: true, ok: false, output: "(\u65E0\u7ED3\u679C)" });
+      pendingToolRef = null;
+      setLive(null);
+    }
+  };
+  const handleEngineEvent = (ev) => {
+    switch (ev.type) {
+      case "llm":
+        setModel(ev.model || model);
+        setTok((t) => t + (ev.prompt_tokens || 0) + (ev.completion_tokens || 0));
+        break;
+      case "tool":
+        flushPending();
+        pendingToolRef = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
+        setLive(pendingToolRef);
+        break;
+      case "result": {
+        if (pendingToolRef) {
+          const t = pendingToolRef;
+          pendingToolRef = null;
+          push({ ...t, hasResult: true, ok: ev.status === "success", output: ev.output });
+          setLive(null);
+        } else {
+          push({
+            id: nid(),
+            type: "result",
+            ok: ev.status === "success",
+            output: (ev.output || "").split("\n")[0]
+          });
+        }
+        break;
+      }
+      case "run-done": {
+        flushPending();
+        const body = (ev.output || ev.summary || "").trim() || "(\u65E0\u8F93\u51FA)";
+        const mdl = ev.model || model;
+        const tk = ev.tokens || { prompt: 0, completion: 0, total: ev.total_tokens || 0 };
+        setModel(mdl);
+        push({
+          id: nid(),
+          type: "assistant",
+          body,
+          meta: `${mdl} \xB7 \u2191${tk.prompt} \u2193${tk.completion} tok \xB7 ${ev.duration || 0}ms`
+        });
+        setTok((t) => t + (tk.total || 0));
+        break;
+      }
+      case "llm-error":
+        flushPending();
+        push({ id: nid(), type: "error", text: "\u6A21\u578B\u9519\u8BEF: " + ev.error });
+        break;
+      default:
+        break;
+    }
+  };
+  function readEvents(limit) {
+    try {
+      const f = path.join(COMPANY, "activity.jsonl");
+      const lines = fs.readFileSync(f, "utf8").trim().split("\n").filter(Boolean);
+      return lines.slice(-limit).map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+  function cmdPool() {
+    const st2 = companyState();
+    if (!st2.pool.length) return push({ id: nid(), type: "info", text: "\u9879\u76EE\u6C60\u4E3A\u7A7A \u2014\u2014 /new <name> <\u9700\u6C42> \u521B\u5EFA" });
+    push({ id: nid(), type: "info", text: st2.pool.map((p) => `${p.id} [${p.status === "active" ? "\u6C38\u52A8" : "\u6682\u505C"}] \u8FDE\u8D25${p.fail_streak || 0}${p.escalate ? "\xB7\u5F3A\u6A21\u578B" : ""} \u6BCF${p.interval_min}\u5206`).join("\n") });
+  }
+  function cmdBill() {
+    const evts = readEvents(5e3);
+    const byModel = {};
+    for (const e of evts) {
+      if (e.type !== "llm") continue;
+      const keyName = e.model || "(\u672A\u77E5\u6A21\u578B)";
+      const m = byModel[keyName] ||= { model: keyName, calls: 0, p: 0, c: 0 };
+      m.calls++;
+      m.p += e.prompt_tokens || 0;
+      m.c += e.completion_tokens || 0;
+    }
+    const rows = Object.values(byModel).sort((a, b) => b.calls - a.calls).map((m) => `  ${m.model}: ${m.calls} \u6B21 \xB7 \u2191${m.p} \u2193${m.c} tok`);
+    push({ id: nid(), type: "info", text: rows.join("\n") || "\u672C\u4F1A\u8BDD\u6682\u65E0\u6A21\u578B\u8C03\u7528\u8BB0\u5F55\uFF08\u5BA1\u8BA1\u6587\u4EF6\u4E3A\u5168\u91CF\u5386\u53F2\uFF09" });
+  }
+  function cmdHistory(pid) {
+    const evts = readEvents(3e3).filter((e) => ["run-start", "run-done", "iteration-start", "iteration-done", "iteration-failed"].includes(e.type) && (!pid || e.project === pid));
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const e of evts.reverse()) {
+      const key = e.ts + e.type + e.project;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(`${e.ts.slice(11, 19)} [${e.project || "-"}] ${e.type}${e.summary ? ": " + trunc(e.summary, 50) : e.output ? ": " + trunc(e.output, 50) : ""}`);
+      if (out.length >= 20) break;
+    }
+    push({ id: nid(), type: "info", text: out.join("\n") || "\u6682\u65E0\u8FED\u4EE3\u8BB0\u5F55" });
+  }
+  function cmdLog(n) {
+    const evts = readEvents(n);
+    push({
+      id: nid(),
+      type: "info",
+      text: evts.map((e) => `${e.ts.slice(11, 19)} ${String(e.agent).slice(0, 10)} ${e.type}${e.tool ? " " + e.tool : ""}`).join("\n") || "\u65E0\u4E8B\u4EF6"
+    });
+  }
+  function cmdEngine(action) {
+    const valid = { start: true, stop: true };
+    if (!valid[action]) return push({ id: nid(), type: "error", text: "\u7528\u6CD5: /engine start|stop" });
+    try {
+      execFileSync(path.join(os.homedir(), ".local/bin/opc-engine"), [action], { timeout: 15e3 });
+      push({ id: nid(), type: "info", text: `\u5F15\u64CE\u5DF2 ${action === "start" ? "\u542F\u52A8 \u25B6" : "\u505C\u6B62 \u23F9"}` });
+    } catch (e) {
+      push({ id: nid(), type: "error", text: "\u64CD\u4F5C\u5931\u8D25: " + e.message });
+    }
+  }
+  function poolWrite(mutator) {
+    const pf = path.join(COMPANY, "pool.json");
+    const pool = readJSON(pf, []);
+    mutator(pool);
+    fs.writeFileSync(pf, JSON.stringify(pool, null, 1));
+  }
+  function poolOp(op, id) {
+    if (!id) return push({ id: nid(), type: "error", text: `\u7528\u6CD5: /${op} <\u9879\u76EE\u540D>` });
+    poolWrite((pool) => {
+      for (const p of pool) if (p.id === id) {
+        if (op === "pause") p.status = "paused";
+        if (op === "resume") p.status = "active";
+        if (op === "kill") p._del = true;
+      }
+      return pool.filter((p) => !p._del);
+    });
+    push({ id: nid(), type: "info", text: `${id} \u2192 ${op}` });
+  }
+  function poolBoost(id) {
+    poolWrite((pool) => {
+      for (const p of pool) if (p.id === id) {
+        p.priority = 99;
+        p.last_run = 0;
+      }
+    });
+    push({ id: nid(), type: "info", text: `${id} \u5DF2\u63D2\u961F\uFF0C\u4E0B\u4E2A\u5FAA\u73AF\u7ACB\u5373\u8FED\u4EE3` });
+  }
+  function setKey(sk) {
+    if (!sk.startsWith("sk-")) return push({ id: nid(), type: "error", text: "key \u5E94\u4EE5 sk- \u5F00\u5934" });
+    const kf = path.join(COMPANY, "keys.json");
+    const keys = readJSON(kf, {});
+    keys.deepseek = sk.trim();
+    fs.writeFileSync(kf, JSON.stringify(keys, null, 1));
+    try {
+      fs.chmodSync(kf, 384);
+    } catch {
+    }
+    push({ id: nid(), type: "info", text: "DeepSeek key \u5DF2\u4FDD\u5B58\uFF08\u7591\u96BE\u6742\u75C7\u81EA\u52A8\u5347\u7EA7\u7528\uFF09" });
+  }
+  function bootstrap(name, requirement) {
+    name = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
+    const dir = path.join(PROJECTS, name);
+    fs.mkdirSync(dir, { recursive: true });
+    push({ id: nid(), type: "info", text: `\u{1F3D7} \u300C${name}\u300D\u5F00\u5DE5\uFF1A\u5F00\u53D1\u2192\u6D4B\u8BD5\u2192\u5B89\u5168\u2192\u6587\u6863\u2192\u53D1\u5E03\u5168\u81EA\u52A8\uFF0C\u5B8C\u6210\u540E\u81EA\u52A8\u5165\u6C60\u6C38\u52A8\u3002\u8FDB\u5EA6\u770B\u540E\u7EED tool \u6D41\u6C34\u3002` });
+    const child = spawn(
+      "opc-agent",
+      [
+        "run",
+        `FULL LIFECYCLE for new project '${name}'. Requirement: ${requirement}. Work in cwd. Phases: product-manager -> architect -> developer -> tester(tests pass) -> security-auditor -> legal(MIT Hanley-Liu) -> docs-writer(README.md+README.zh-CN.md) -> designer(docs/assets/banner.svg) -> community files -> git init & push to github.com/Hanley-Liu/${name} (GITHUB_TOKEN set, insteadOf rewrite active) -> devops-release(topics+description). Decide everything yourself, never ask.`,
+        "--dir",
+        dir,
+        "--agent",
+        "build",
+        "--json"
+      ],
+      { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` } }
+    );
+    let buf = "";
+    child.stdout.on("data", (d) => {
+      buf += d.toString();
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith("{")) continue;
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        handleEngineEvent(ev);
+      }
+    });
+    child.on("close", (code) => {
+      if (code === 0 && fs.existsSync(path.join(dir, "README.md"))) {
+        poolWrite((pool) => {
+          if (!pool.some((p) => p.id === name))
+            pool.push({ id: name, status: "active", interval_min: 60, priority: 5, last_run: 0, fail_streak: 0 });
+        });
+        push({ id: nid(), type: "info", text: `\u{1F389} \u300C${name}\u300D\u5EFA\u6210\u5165\u6C60\uFF0C\u5F00\u59CB\u6C38\u52A8\uFF01` });
+      } else {
+        push({ id: nid(), type: "error", text: `\u300C${name}\u300D\u6784\u5EFA\u9000\u51FA(code=${code})\u3002\u91CD\u8BD5: /new ${name} ${requirement.slice(0, 30)}\u2026` });
+      }
+    });
+  }
   useEffect(() => {
     const st2 = companyState();
     push({
@@ -153,71 +362,40 @@ function App({ initialDir }) {
   }, []);
   const push = useCallback((e) => setEntries((prev) => [...prev, e]), []);
   const submit = useCallback((task) => {
-    const dir2 = resolveDir(task, initialDir);
+    const dir = resolveDir(task, initialDir);
     push({ id: nid(), type: "user", text: task });
     setBusy(true);
     const agentID = route(task);
-    let pendingTool = null;
-    const flushTool = () => {
-      if (pendingTool) push({ ...pendingTool, hasResult: true, ok: false, output: "(\u65E0\u7ED3\u679C)" });
-      pendingTool = null;
-      setLive(null);
-    };
+    let buf = "";
     const child = spawn(
       "opc-agent",
-      ["run", task, "--dir", dir2, "--agent", agentID, "--json"],
-      { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir2 }
+      ["run", task, "--dir", dir, "--agent", agentID, "--json"],
+      { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir }
     );
-    const rl = readline.createInterface({ input: child.stdout });
-    rl.on("line", (raw) => {
-      const line = raw.trim();
-      if (!line.startsWith("{")) return;
-      let ev;
-      try {
-        ev = JSON.parse(line);
-      } catch {
-        return;
-      }
-      switch (ev.type) {
-        case "llm":
-          setModel(ev.model || model);
-          setTok((t) => t + (ev.prompt_tokens || 0) + (ev.completion_tokens || 0));
-          break;
-        case "tool":
-          flushTool();
-          pendingTool = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
-          setLive(pendingTool);
-          break;
-        case "result":
-          if (pendingTool) {
-            push({ ...pendingTool, hasResult: true, ok: ev.status === "success", output: ev.output });
-            pendingTool = null;
-            setLive(null);
-          }
-          break;
-        case "run-done": {
-          flushTool();
-          const body = (ev.output || ev.summary || "").trim() || "(\u65E0\u8F93\u51FA)";
-          const mdl = ev.model || model;
-          const tk = ev.tokens || { prompt: 0, completion: 0, total: ev.total_tokens || 0 };
-          setModel(mdl);
-          const meta = `${mdl} \xB7 \u2191${tk.prompt} \u2193${tk.completion} tok \xB7 ${ev.duration || 0}ms`;
-          push({ id: nid(), type: "assistant", body, meta });
-          setTok((t) => t + (tk.total || 0));
-          break;
+    child.stdout.on("data", (d) => {
+      buf += d.toString();
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith("{")) continue;
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
         }
-        case "llm-error":
-          flushTool();
-          push({ id: nid(), type: "error", text: "\u6A21\u578B\u9519\u8BEF: " + ev.error });
-          break;
+        handleEngineEvent(ev);
       }
     });
     child.on("close", (code) => {
-      flushTool();
-      setBusy(false);
-      if (code !== 0) push({ id: nid(), type: "error", text: `\u4EFB\u52A1\u5F02\u5E38\u9000\u51FA (code=${code})\uFF0C\u8BE6\u89C1 logs/activity.jsonl` });
+      if (code !== 0) push({
+        id: nid(),
+        type: "error",
+        text: `\u4EFB\u52A1\u9000\u51FA code=${code}\uFF08\u8BE6\u89C1 activity.jsonl\uFF09`
+      });
     });
-  }, [initialDir, push]);
+  }, [initialDir, push, handleEngineEvent]);
   useInput((ch, key) => {
     if (key.ctrl && ch === "c") {
       exit();
@@ -236,35 +414,79 @@ function App({ initialDir }) {
         return;
       }
       if (t === "/pool") {
-        const st2 = companyState();
-        push({ id: nid(), type: "info", text: st2.pool.map((p) => `${p.id} [${p.status}] \u8FDE\u8D25${p.fail_streak || 0}`).join(" \xB7 ") || "\u9879\u76EE\u6C60\u4E3A\u7A7A \u2014\u2014 \u63D0\u5230\u65B0\u60F3\u6CD5\u5373\u53EF\u521B\u5EFA\u9700\u6C42" });
+        cmdPool();
         return;
       }
       if (t === "/agents") {
-        push({ id: nid(), type: "info", text: "\u7F16\u6392 orchestrator \xB7 \u89C4\u5212 planner \xB7 \u5F00\u53D1 developer \xB7 \u6D4B\u8BD5 tester \xB7 \u5BA1\u67E5 reviewer \xB7 \u67B6\u6784 architect \xB7 \u5206\u6790 analyst \xB7 \u8FD0\u7EF4 operator" });
+        push(info("\u7F16\u6392 build \xB7 \u89C4\u5212 product-manager \xB7 \u5F00\u53D1 developer \xB7 \u6D4B\u8BD5 tester \xB7 \u5B89\u5168 security-auditor \xB7 \u6587\u6863 docs-writer \xB7 \u8425\u9500 marketing-growth \xB7 \u53D1\u5E03 github-agent/devops-release \xB7 \u5206\u6790 analyst \xB7 \u6CD5\u52A1 legal-compliance \xB7 \u4EBA\u4E8B hr-manager"));
+        return;
+      }
+      if (t === "/bill") {
+        cmdBill();
+        return;
+      }
+      if (t.startsWith("/history")) {
+        cmdHistory(t.split(" ")[1] || "");
+        return;
+      }
+      if (t.startsWith("/log")) {
+        cmdLog(parseInt(t.split(" ")[1]) || 15);
+        return;
+      }
+      if (t.startsWith("/engine ")) {
+        cmdEngine(t.split(" ")[1]);
+        return;
+      }
+      if (t.startsWith("/pause ")) {
+        poolOp("pause", t.slice(7).trim());
+        return;
+      }
+      if (t.startsWith("/resume ")) {
+        poolOp("resume", t.slice(8).trim());
+        return;
+      }
+      if (t.startsWith("/kill ")) {
+        poolOp("kill", t.slice(5).trim());
+        return;
+      }
+      if (t.startsWith("/go ")) {
+        poolBoost(t.slice(3).trim());
+        return;
+      }
+      if (t.startsWith("/new ")) {
+        const rest = t.slice(4).trim();
+        const sp = rest.indexOf(" ");
+        if (sp < 1) {
+          push(info("\u7528\u6CD5: /new <name> <\u9700\u6C42\u63CF\u8FF0>"));
+          return;
+        }
+        bootstrap(rest.slice(0, sp), rest.slice(sp + 1));
+        return;
+      }
+      if (t.startsWith("/key ")) {
+        setKey(t.slice(5).trim());
+        return;
+      }
+      if (t.startsWith("/")) {
+        push(info("\u672A\u77E5\u547D\u4EE4\u3002\u53EF\u7528: /pool /agents /bill /history /log /engine /pause /resume /kill /go /new /key /clear /exit"));
         return;
       }
       submit(t);
-      return;
-    }
-    if (key.backspace || key.delete) {
+    } else if (key.backspace || key.delete) {
       setInput((i) => i.slice(0, -1));
-      return;
-    }
-    if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+    } else if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
       setInput((i) => i + ch);
     }
   });
-  const staticItems = entries.map((e) => ({ id: e.id, node: renderEntry(e) }));
   const st = companyState();
   const breath = tick % 2 === 0 ? "\u25CF" : "\u25CB";
   const engColor = busy ? C.warn : st.running ? C.success : C.muted;
-  return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, /* @__PURE__ */ React.createElement(Static, { items: staticItems }, (item) => /* @__PURE__ */ React.createElement(Box, { key: item.id }, item.node)), live ? /* @__PURE__ */ React.createElement(ToolRow, { e: { ...live, hasResult: false } }) : null, busy ? /* @__PURE__ */ React.createElement(Thinking, null) : null, /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), busy ? null : /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", /* @__PURE__ */ React.createElement(Text, { color: engColor }, breath), " \u5F15\u64CE:" + (st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62") + " \xB7 \u6C60:" + st.active.length + "/" + st.pool.length, " \xB7 " + trunc(model, 30) + " \xB7 \u2191\u2193" + tok + " tok \xB7 Enter \u6D3E\u6D3B \xB7 Ctrl+C \u9000\u51FA"));
+  return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, entries.slice(-12).map((e) => /* @__PURE__ */ React.createElement(Box, { key: e.id }, renderEntry(e))), live ? /* @__PURE__ */ React.createElement(Box, { paddingLeft: 2 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.tool, bold: true }, "\u26A1 "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, live.tool, " "), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(prettyParams(live.args), 72)))) : null, busy ? /* @__PURE__ */ React.createElement(Thinking, null) : null, /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), busy ? null : /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", /* @__PURE__ */ React.createElement(Text, { color: engColor }, breath), " \u5F15\u64CE:" + (st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62") + " \xB7 \u6C60:" + st.active.length + "/" + st.pool.length, " \xB7 " + trunc(model, 30) + " \xB7 \u2191\u2193" + tok + " tok \xB7 Enter \u6D3E\u6D3B \xB7 Ctrl+C \u9000\u51FA"));
 }
 var idx = process.argv.indexOf("--dir");
-var dir = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();
-if (!fs.existsSync(dir)) {
-  console.error("\u76EE\u5F55\u4E0D\u5B58\u5728:", dir);
+var dirArg = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();
+if (!fs.existsSync(dirArg)) {
+  console.error("\u76EE\u5F55\u4E0D\u5B58\u5728:", dirArg);
   process.exit(1);
 }
-render(/* @__PURE__ */ React.createElement(App, { initialDir: dir }), { patchConsole: false });
+render(/* @__PURE__ */ React.createElement(App, { initialDir: dirArg }), { patchConsole: false });
