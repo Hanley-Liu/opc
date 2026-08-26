@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OPC — 透明驾驶舱</title>
+<style>
+:root{--bg:#0d1117;--bg2:#010409;--card:#161b22;--border:#30363d;--fg:#e6edf3;--dim:#8b949e;
+--green:#3fb950;--red:#f85149;--amber:#d29922;--blue:#58a6ff;--purple:#bc8cff;--mono:"JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--fg);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px}
+.wrap{max-width:1280px;margin:0 auto;padding:0 16px 40px}
+/* header */
+header{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+h1{font-size:16px;margin:0;font-weight:700}
+h1 span{color:var(--dim);font-weight:400;font-size:12px;margin-left:8px}
+.pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;font-family:var(--mono)}
+.pill.on{background:#12261e;color:var(--green);border:1px solid #1b4721}
+.pill.off{background:#2d1517;color:var(--red);border:1px solid #67272c}
+.spacer{flex:1}
+button{cursor:pointer;border:0;border-radius:6px;padding:6px 12px;font-size:13px;background:#21262d;color:var(--fg)}
+button:hover{filter:brightness(1.3)}
+button.primary{background:#238636;color:#fff;font-weight:600}
+button.danger{background:#b62324;color:#fff}
+button.small{padding:3px 9px;font-size:12px}
+input,textarea{background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:8px 10px;font-size:13px;font-family:inherit}
+textarea{resize:vertical}
+/* tabs */
+nav.tabs{display:flex;gap:2px;padding:10px 0 0;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg2);z-index:5}
+nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;padding:8px 16px;color:var(--dim);font-size:13.5px;font-family:var(--mono)}
+nav.tabs button.active{color:var(--fg);border-bottom-color:var(--blue);background:var(--card)}
+.tabpane{display:none;padding-top:18px}
+.tabpane.active{display:block}
+/* alerts */
+.alert{margin:6px 0;padding:8px 13px;border-radius:8px;font-size:13px;border:1px solid;display:flex;gap:8px;align-items:center}
+.alert.high{background:#2d1215;border-color:#67272c;color:#ffb3ad}
+.alert.info{background:#1c2333;border-color:#2b3a5a;color:#a5c8ff}
+/* cards */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.card h3{margin:0 0 6px;font-size:15px;display:flex;align-items:center;gap:8px;font-family:var(--mono)}
+.badge{font-size:10.5px;padding:2px 8px;border-radius:99px;font-family:var(--mono)}
+.badge.g{background:#12261e;color:var(--green)}.badge.y{background:#33270f;color:var(--amber)}.badge.p{background:#2a1d3a;color:var(--purple)}.badge.b{background:#12233d;color:var(--blue)}
+.meta{color:var(--dim);font-size:12.5px;line-height:1.85;margin:6px 0}
+.actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+/* new proj form */
+.formrow{display:flex;gap:8px;margin-top:4px}
+.formrow input{flex:1}
+.newproj textarea{width:100%;min-height:64px}
+/* activity stream - opencode style */
+.stream{font-family:var(--mono);font-size:12.5px;line-height:1.55}
+.evt{border-left:2px solid var(--border);margin:0;padding:3px 0 3px 12px}
+.evt:hover{background:#10161f}
+.evt .head{cursor:pointer;user-select:none;white-space:pre-wrap;word-break:break-all}
+.evt .t{color:#484f58;margin-right:8px}
+.evt .who{color:var(--purple);font-weight:600}
+.evt .prj{color:var(--amber)}
+details.raw summary{cursor:pointer;color:var(--blue);font-size:11.5px;padding:2px 0;list-style:none}
+details.raw summary::marker{content:none}
+details.raw summary::before{content:"▸ 展开";color:var(--dim)}
+details.raw[open] summary::before{content:"▾ 收起"}
+pre.out{background:#010409;border:1px solid var(--border);border-radius:6px;padding:8px 10px;overflow-x:auto;
+max-height:340px;overflow-y:auto;font-family:var(--mono);font-size:12px;margin:4px 0 0;color:#c9d1d9;white-space:pre-wrap}
+.t-llm .head::before{content:"🧠 ";}.t-tool .head::before{content:"⚡ ";}
+.t-result-ok .head::before{content:"✓ ";color:var(--green)}
+.t-result-fail .head::before{content:"✗ ";color:var(--red)}
+.t-run-start .head::before{content:"▶ "}
+.t-run-done .head::before{content:"■ ";color:var(--green)}
+.t-llm-error .head::before{content:"⚠ "}
+.filters{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap;align-items:center}
+.filters select,.filters input{font-size:12.5px;padding:5px 8px}
+/* roster table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--dim);text-align:left;font-weight:600;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid #21262d}
+tr:hover td{background:#10161f}
+.dot{display:inline-block;width:8px;height:8px;border-radius:99%;margin-right:6px}
+.dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.idle{background:#484f58}
+/* billing */
+.bignums{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.big{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center}
+.big .n{font-size:24px;font-weight:700;color:var(--blue);font-family:var(--mono)}
+.big .l{color:var(--dim);font-size:11.5px;margin-top:3px}
+/* toast + wizard kept */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f6feb;color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;opacity:0;transition:.3s;z-index:99}
+.toast.show{opacity:1}
+.overlay{position:fixed;inset:0;background:rgba(1,4,9,.82);display:flex;align-items:center;justify-content:center;z-index:9}
+.wizard{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:26px;max-width:560px;width:92%}
+.wizard p{color:var(--dim);line-height:1.8;font-size:13.5px}
+.section-title{margin:22px 0 10px;font-size:13px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase}
+.empty{color:var(--dim);text-align:center;padding:30px;font-size:13px}
+code,.mono{font-family:var(--mono)}
+</style>
+</head>
+<body><div class="wrap">
+<header>
+  <h1>🏢 OPC<span>透明驾驶舱 · 一切可见</span></h1>
+  <span id="engine-pill" class="pill off">…</span>
+  <div class="spacer"></div>
+  <button id="engine-btn" class="primary" onclick="toggleEngine()">启动</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-t="projects" class="active">📦 项目</button>
+  <button data-t="staff">👥 员工</button>
+  <button data-t="stream">🌊 活动流</button>
+  <button data-t="history">📜 迭代史</button>
+  <button data-t="billing">📊 账单</button>
+  <button data-t="settings">⚙️</button>
+</nav>
+
+<!-- ============ 项目 ============ -->
+<div class="tabpane active" id="tab-projects">
+  <div id="alerts"></div>
+  <div class="section-title">📥 提交新需求（入池即开始永动）</div>
+  <div class="card newproj">
+    <div class="formrow">
+      <input id="np-name" placeholder="项目名（英文，如 my-idea）">
+      <input id="np-interval" type="number" value="60" min="15" style="max-width:110px" title="迭代间隔(分钟)">
+    </div>
+    <textarea id="np-req" placeholder="描述你想要的东西：做什么、给谁用、核心功能……AI 会全自动完成开发→测试→安全→文档→发布，无需你做任何决策"></textarea>
+    <div style="display:flex;justify-content:flex-end"><button class="primary" onclick="createProject()">🚀 入池开工</button></div>
+    <div id="np-msg" style="color:var(--dim);font-size:12.5px"></div>
+  </div>
+  <div class="section-title">📦 项目池</div>
+  <div id="pool" class="grid"></div>
+</div>
+
+<!-- ============ 员工 ============ -->
+<div class="tabpane" id="tab-staff">
+  <div class="section-title">👥 全员名册 · 实时状态（绿点=5分钟内在干活）</div>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table id="roster-table">
+      <thead><tr><th></th><th>员工</th><th>部门</th><th>职责</th><th>当前项目</th><th>最近动作</th><th>最后活跃</th><th>模型</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ 活动流 ============ -->
+<div class="tabpane" id="tab-stream">
+  <div class="filters">
+    <select id="f-agent" onchange="loadStream()"><option value="">全部员工</option></select>
+    <select id="f-project" onchange="loadStream()"><option value="">全部项目</option></select>
+    <select id="f-type" onchange="loadStream()">
+      <option value="">全部类型</option>
+      <option value="tool">工具调用</option>
+      <option value="result">工具结果</option>
+      <option value="llm">模型调用</option>
+      <option value="run-start">任务开始</option>
+      <option value="run-done">任务完成</option>
+      <option value="llm-error">错误</option>
+    </select>
+    <label style="color:var(--dim);font-size:12px"><input type="checkbox" id="f-live" checked onchange="toggleLive()"> 实时刷新</label>
+  </div>
+  <div id="stream" class="stream card" style="padding:12px"></div>
+</div>
+
+<!-- ============ 迭代史 ============ -->
+<div class="tabpane" id="tab-history">
+  <div class="filters"><select id="h-project" onchange="loadHistory()"><option value="">全部项目</option></select></div>
+  <div id="history"></div>
+</div>
+
+<!-- ============ 账单 ============ -->
+<div class="tabpane" id="tab-billing">
+  <div id="bill-nums" class="bignums"></div>
+  <div class="section-title">按模型统计</div>
+  <div class="card" style="padding:0"><table id="bill-table">
+    <thead><tr><th>模型</th><th>调用次数</th><th>Prompt tokens</th><th>Completion tokens</th></tr></thead><tbody></tbody>
+  </table></div>
+  <div class="section-title">最近任务（run 级）</div>
+  <div class="card" style="padding:0"><table id="runs-table">
+    <thead><tr><th>时间</th><th>员工</th><th>项目</th><th>任务</th><th>状态</th><th>Tokens</th></tr></thead><tbody></tbody>
+  </table></div>
+</div>
+
+<!-- ============ 设置 ============ -->
+<div class="tabpane settings" id="tab-settings">
+  <div class="section-title">⚙️ 设置</div>
+  <div class="card" style="max-width:640px">
+    <label style="display:block;color:var(--dim);font-size:12.5px;margin:10px 0 4px">DeepSeek 强模型 Key（连败3次自动升级用）</label>
+    <input id="set-ds" style="width:100%">
+    <label style="display:block;color:var(--dim);font-size:12.5px;margin:10px 0 4px">局域网访问密码</label>
+    <input id="set-lan" style="width:100%" placeholder="留空不修改">
+    <label style="display:block;color:var(--dim);font-size:12.5px;margin:10px 0 4px">本机免密直通链接</label>
+    <input id="set-url" readonly style="width:100%" onclick="this.select()" class="mono">
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="primary" onclick="saveSettings()">保存</button>
+      <button onclick="location.reload()">刷新</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+let S=null,liveTimer=null;
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+async function api(p,body){const r=await fetch(p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});if(r.status===401){location.href='/';throw 0}return r.json()}
+function fmtT(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{return ts}}
+function ago(ts){if(!ts)return'从未';const s=(Date.now()-new Date(ts).getTime())/1000;if(s<60)return'刚刚';if(s<3600)return Math.floor(s/60)+'分钟前';return Math.floor(s/3600)+'小时前'}
+const TYPE_CN={iteration-start:'开始迭代',iteration-done:'✅迭代完成','iteration-failed':'❌迭代失败','bootstrap-start':'🏗新项目建设中','pool-added':'📥入池',paused:'⏸暂停',resumed:'▶恢复',prioritized:'⚡加速',killed:'🗑移除',added:'📥入池','metrics-tick':'📊数据采集'};
+
+// tabs
+$$('#tabs button').forEach(b=>b.onclick=()=>{
+  $$('#tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  $$('.tabpane').forEach(p=>p.classList.remove('active'));
+  $('#tab-'+b.dataset.t).classList.add('active');
+  if(b.dataset.t==='staff')loadRoster();
+  if(b.dataset.t==='stream')loadStream();
+  if(b.dataset.t==='history')loadHistory();
+  if(b.dataset.t==='billing')loadBilling();
+  if(b.dataset.t==='settings')openSettings();
+});
+
+async function refresh(){
+  S=await api('/api/state');
+  const on=S.engine&&S.engine.running;
+  $('#engine-pill').textContent=on?'● 引擎运转中':'○ 已停止';
+  $('#engine-pill').className='pill '+(on?'on':'off');
+  $('#engine-btn').textContent=on?'⏹ 叫停引擎':'▶ 启动';
+  $('#engine-btn').className=on?'danger':'primary';
+  $('#alerts').innerHTML=(S.alerts||[]).map(a=>`<div class="alert ${a.level}">${a.level==='high'?'🚨':'ℹ️'}<b>${a.project}</b> — ${a.msg}</div>`).join('');
+  renderPool();fillSelects();
+}
+function renderPool(){
+  $('#pool').innerHTML=(S.pool||[]).map(p=>{
+    const lastEv=(S.events||[]).find(e=>e.project===p.id);
+    const doing=p.status!=='active'?'已暂停':lastEv?`${TYPE_CN[lastEv.type]||lastEv.type} ${fmtT(lastEv.ts)}`:'等待下一轮';
+    return `<div class="card"><h3>${p.id}<span class="badge ${p.status==='active'?'g':'y'}">${p.status==='active'?'永动中':'暂停'}</span>${p.escalate?'<span class="badge p">强模型</span>':''}</h3>
+    <div class="meta">当前：<b>${doing}</b> · 连败 ${p.fail_streak||0} · 上轮 ${ago(new Date(p.last_run*1000).toISOString())} · 每 ${p.interval_min} 分钟<br>
+    最近：${lastEv?(lastEv.detail||'').slice(0,70)||TYPE_CN[lastEv.type]:'—'}</div>
+    <div class="actions">
+      ${p.status==='active'?`<button class="small" onclick="pool('pause','${p.id}')">⏸ 暂停</button>`:`<button class="small primary" onclick="pool('resume','${p.id}')">▶ 恢复</button>`}
+      <button class="small" onclick="pool('prioritize','${p.id}')">⚡ 立刻迭代</button>
+      <button class="small" onclick="showProject('${p.id}')">📜 详情</button>
+      <button class="small danger" onclick="if(confirm('彻底移除 ${p.id}?'))pool('kill','${p.id}')">🗑</button>
+    </div></div>`}).join('')||'<div class="empty">项目池是空的——提交你的第一个需求吧</div>';
+  if(!$('#tab-history').classList.contains('active'))return;
+}
+function fillSelects(){
+  const ps=(S.pool||[]).map(p=>`<option value="${p.id}">${p.id}</option>`).join('');
+  const fp=$('#f-project'),hp=$('#h-project');
+  if(fp.options.length<=1){fp.innerHTML='<option value="">全部项目</option>'+ps;hp.innerHTML='<option value="">全部项目</option>'+ps}
+}
+
+async function createProject(){
+  const name=$('#np-name').value.trim(),requirement=$('#np-req').value.trim();
+  if(!name||!requirement)return toast('项目名和需求都要填哦');
+  $('#np-msg').textContent='🏗 AI 全流程建设中（开发→测试→安全→文档→发布），完成后自动入池…';
+  const r=await api('/api/projects/create',{name,requirement,interval_min:+$('#np-interval').value});
+  $('#np-msg').textContent=r.ok?'✅ 已开工！在「活动流」标签看它每一步干了什么。':('出错:'+r.error);
+  if(r.ok){$('#np-name').value='';$('#np-req').value=''}
+}
+async function pool(act,id){await api('/api/pool/'+act,{id});toast({pause:'已暂停',resume:'已恢复',kill:'已移除',prioritize:'已插队!'}[act]);refresh()}
+async function toggleEngine(){const on=S?.engine?.running;
+  if(on&&!confirm('确定叫停整个引擎?'))return;
+  await api('/api/engine/'+(on?'stop':'start'),{});refresh()}
+
+/* ---- 员工名册 ---- */
+async function loadRoster(){
+  const {agents}=await api('/api/agents');
+  $('#roster-table tbody').innerHTML=agents.map(a=>`
+   <tr><td><span class="dot ${a.working?'live':'idle'}"></span></td>
+   <td class="mono"><b>${a.name}</b>${a.source==='hired'?' <span class="badge p">HR招聘</span>':''}</td>
+   <td>${a.dept||'-'}</td><td style="color:var(--dim);max-width:260px">${a.description||'-'}</td>
+   <td>${a.working?`<span class="badge b">${a.currentProject||''}</span>`:'—'}</td>
+   <td class="mono" style="font-size:12px;color:var(--dim)">${a.lastAction||'—'}</td>
+   <td style="color:var(--dim)">${ago(a.lastSeen)}</td>
+   <td class="mono" style="font-size:11.5px;color:var(--dim)">${(a.model||'').split('/').pop()}</td></tr>`).join('');
+}
+
+/* ---- 活动流 ---- */
+function evtHTML(e){
+  const cls={'llm':'t-llm','tool':'t-tool','llm-error':'t-llm-error','run-start':'t-run-start','run-done':'t-run-done'}[e.type]||'';
+  let head='',raw='';
+  switch(e.type){
+    case 'llm':head=`<span class="who">${e.agent}</span> 调用模型 <b>${(e.model||'?')}</b> <span class="t">step${e.step} ↑${e.prompt_tokens} ↓${e.completion_tokens} tok</span>`;break;
+    case 'tool':{const args=(e.args||'').slice(0,160);
+      try{const a=JSON.parse(e.args);if(a.command)args='$ '+a.command;else if(a.file)args=`${e.tool} → ${a.file}`}catch{}
+      head=`<span class="who">${e.agent}</span> <span class="prj">[${e.project}]</span> ${e.tool}: <span style="color:#79c0ff">${args.replace(/</g,'&lt;')}</span>`;
+      break}
+    case 'result':{const ok=e.ok;head=`<span class="who">${e.agent}</span> ${e.tool} ${ok?'成功':'失败'} <span class="t">${(e.output||'').slice(0,80).replace(/\n/g,' ').replace(/</g,'&lt;')}</span>`;
+      raw=`<details class="raw"><summary></summary><pre class="out">${(e.output||'').replace(/</g,'&lt;')}</pre></details>`;break}
+    case 'run-start':head=`<span class="who">${e.agent}</span> 接到任务 <span class="prj">[${e.project}]</span> <span class="t">${(e.task||'').slice(0,90).replace(/</g,'&lt;')}</span>`;
+      raw=`<details class="raw"><summary></summary><pre class="out">${(e.task||'').replace(/</g,'&lt;')}</pre></details>`;break;
+    case 'run-done':head=`<span class="who">${e.agent}</span> 完成任务 [${e.project}] <span class="t">${e.steps}步 · ${e.total_tokens} tok</span>`;
+      raw=`<details class="raw"><summary></summary><pre class="out">${(e.summary||'').replace(/</g,'&lt;')}</pre></details>`;break;
+    case 'llm-error':head=`<span class="who">${e.agent}</span> ⚠️ ${(e.error||'').slice(0,140).replace(/</g,'&lt;')}`;break;
+    default:head=`<span class="who">${e.agent}</span> ${e.type}`;
+  }
+  return `<div class="evt ${cls}${e.type==='result'?(e.ok?' t-result-ok':' t-result-fail'):''}">
+    <div class="head" onclick="this.parentElement.querySelector('details')&&(d=this.parentElement.querySelector('details'),d.open=!d.open)"><span class="t">${fmtT(e.ts)}</span>${head}</div>${raw}</div>`;
+}
+async function loadStream(){
+  const q=new URLSearchParams({limit:250});
+  if($('#f-agent').value)q.set('agent',$('#f-agent').value);
+  if($('#f-project').value)q.set('project',$('#f-project').value);
+  if($('#f-type').value)q.set('type',$('#f-type').value);
+  const {events}=await api('/api/activity?'+q);
+  $('#stream').innerHTML=events.map(evtHTML).join('')||'<div class="empty">暂无活动——引擎跑起来这里就是实况直播</div>';
+}
+function toggleLive(){if($('#f-live').checked){liveTimer=setInterval(()=>{$('#tab-stream').classList.contains('active')&&loadStream()},4000)}else clearInterval(liveTimer)}
+toggleLive();
+
+/* ---- 迭代史 ---- */
+async function loadHistory(){
+  const pid=$('#h-project').value;
+  const d=await api('/api/project-history'+(pid?'?id='+pid:''));
+  const iters=d.iterations.filter(e=>['iteration-start','iteration-done','iteration-failed','pool-added','bootstrap-start'].includes(e.type));
+  $('#history').innerHTML=iters.slice(-30).reverse().map(e=>{
+    const detailActs=d.activity.filter(a=>Math.abs(new Date(a.ts)-new Date(e.ts))/1000<3600&&a.run&&e.ts.startsWith(a.ts.slice(0,13))).slice(0,200);
+    return `<details class="evt" style="border-left-color:${e.type==='iteration-failed'?'var(--red)':e.type==='iteration-done'?'var(--green)':'var(--border)'};padding:8px 0 8px 12px">
+    <summary class="mono" style="cursor:pointer"><span class="t">${fmtT(e.ts)}</span><b>${e.project}</b> ${TYPE_CN[e.type]||e.type} <span class="t">${(e.detail||'').slice(0,60)}</span></summary>
+    <div class="stream" style="margin-top:6px">${detailActs.slice(0,60).map(evtHTML).join('')||'<div class="empty">该时段明细未记录</div>'}</div></div>`}).join('')
+    ||'<div class="empty">暂无迭代记录</div>';
+}
+function showProject(id){$$('#tabs button').forEach(x=>x.classList.toggle('active',x.dataset.t==='history'));$$('.tabpane').forEach(p=>p.classList.remove('active'));$('#tab-history').classList.add('active');$('#h-project').value=id;loadHistory()}
+
+/* ---- 账单 ---- */
+async function loadBilling(){
+  const d=await api('/api/billing');
+  const tot=d.byModel.reduce((s,m)=>s+m.calls,0),pt=d.byModel.reduce((s,m)=>s+m.promptTokens,0),ct=d.byModel.reduce((s,m)=>s+m.completionTokens,0);
+  $('#bill-nums').innerHTML=`<div class="big"><div class="n">${tot}</div><div class="l">模型调用次数</div></div>
+  <div class="big"><div class="n">${(pt/1000).toFixed(1)}k</div><div class="l">Prompt tokens</div></div>
+  <div class="big"><div class="n">${(ct/1000).toFixed(1)}k</div><div class="l">Completion tokens</div></div>
+  <div class="big"><div class="n">$0.00</div><div class="l">花费(免费链路)</div></div>`;
+  $('#bill-table tbody').innerHTML=d.byModel.sort((a,b)=>b.calls-a.calls).map(m=>`
+   <tr><td class="mono">${m.model}</td><td>${m.calls}</td><td class="mono">${m.promptTokens.toLocaleString()}</td><td class="mono">${m.completionTokens.toLocaleString()}</td></tr>`).join('')||'<tr><td colspan=4 class="empty">暂无调用</td></tr>';
+  $('#runs-table tbody').innerHTML=d.recentRuns.map(r=>`
+   <tr><td class="mono" style="font-size:11.5px">${fmtT(r.ts)}</td><td>${r.agent}</td><td>${r.project}</td>
+   <td style="color:var(--dim);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.task||''}</td>
+   <td>${r.done?'<span class="badge g">完成</span>':'<span class="badge y">进行中</span>'}</td>
+   <td class="mono">${r.totalTokens??'—'}</td></tr>`).join('')||'<tr><td colspan=6 class="empty">暂无任务</td></tr>';
+}
+
+/* ---- 设置 ---- */
+async function openSettings(){const s=await api('/api/settings');$('#set-ds').value=s.deepseek||'';$('#set-lan').value='';$('#set-url').value=s.accessUrl}
+async function saveSettings(){await api('/api/settings',{deepseek:$('#set-ds').value.trim(),lanPassword:$('#set-lan').value});toast('已保存')}
+
+refresh().then(()=>{
+  // seed agent filter options
+  api('/api/agents').then(({agents})=>{$('#f-agent').innerHTML='<option value="">全部员工</option>'+agents.map(a=>`<option value="${a.name}">${a.name}</option>`).join('')})
+});
+setInterval(()=>{if($('#tab-projects').classList.contains('active')||true)refresh()},6000);
+setInterval(()=>{$('#tab-stream').classList.contains('active')&&$('#f-live').checked&&loadStream()},4000);
+</script>
+</body></html>

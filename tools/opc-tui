@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+// opc-tui — full-screen transparent monitor, pure ANSI, zero deps.
+// Layout mimics opencode TUI feel: dark, monospace, live streams.
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+const HOME = os.homedir();
+const C = (p) => path.join(HOME, ".local/share/opencode/company", p);
+const read = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
+const jlines = (f, n) => read(f).trim().split("\n").filter(Boolean).slice(-n).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+const GREEN = "\x1b[32m", RED = "\x1b[31m", DIM = "\x1b[2m", B = "\x1b[1m", PURPLE = "\x1b[35m", AMBER = "\x1b[33m", BLUE = "\x1b[36m", R = "\x1b[0m";
+const pad = (s, w) => (String(s ?? "")).slice(0, w).padEnd(w);
+const trunc = (s, w) => { s = String(s ?? "").replace(/\n/g, " "); return s.length > w ? s.slice(0, w - 1) + "…" : s; };
+
+function draw() {
+  const rows = process.stdout.rows || 30;
+  let out = "\x1b[H\x1b[2J";
+  const line = (s = "") => { out += s + "\x1b[K\n"; };
+
+  // header
+  const eng = read(C("engine.json"));
+  const running = eng.includes('"running": true') || eng.includes('"running":true');
+  line(`${B}🏢 OPC 透明监控台${R}  ${DIM}q退出 · 数据每2秒刷新${R}`);
+  line(`${"─".repeat(process.stdout.columns || 100)}`);
+  const pool = JSON.parse(read(C("pool.json")) || "[]");
+  line(`引擎: ${running ? GREEN + "● 运转中" : RED + "○ 已停止"}${R}   项目池: ${pool.filter(p => p.status === "active").length}/${pool.length} 永动中`);
+  line();
+
+  // pool table
+  line(`${B}📦 项目池${R}`);
+  for (const p of pool) {
+    const st = p.status === "active" ? GREEN + "永动" : AMBER + "暂停";
+    const last = p.last_run ? new Date(p.last_run * 1000).toTimeString().slice(0, 5) : "从未";
+    const esc = p.escalate ? ` ${PURPLE}[强模型]${R}` : "";
+    line(`  ${st}${R} ${B}${pad(p.id, 16)}${R} 连败:${p.fail_streak || 0} 上轮:${last} 每${p.interval_min}分${esc}`);
+  }
+  if (!pool.length) line(`  ${DIM}(空池——网页提交需求即入池)${R}`);
+  line();
+
+  // staff live
+  const act = jlines(C("activity.jsonl"), 300);
+  const now = Date.now();
+  const byAgent = {};
+  for (const e of act) byAgent[e.agent] = e; // last per agent
+  const working = Object.entries(byAgent).filter(([, e]) => now - Date.parse(e.ts) < 5 * 60_000);
+  line(`${B}👥 员工动态${R} (${working.length} 人工作中)`);
+  for (const [name, e] of working.slice(0, 4)) {
+    line(`  ${GREEN}●${R} ${PURPLE}${pad(name, 18)}${R} ${DIM}[${e.project}]${R} ${trunc(e.type === "tool" ? `${e.tool}: ${e.args}` : e.type, 60)}`);
+  }
+  if (!working.length) line(`  ${DIM}暂无员工在干活(引擎停了?)${R}`);
+  line();
+
+  // live stream tail — opencode style
+  line(`${B}🌊 工具级实况${R} ${DIM}(最新 ${Math.min(rows - 20, act.length)} 条 / 详情见网页驾驶舱)${R}`);
+  const budget = Math.max(4, rows - 22);
+  for (const e of act.slice(-budget)) {
+    const t = (e.ts || "").slice(11, 19);
+    switch (e.type) {
+      case "tool": {
+        let args = e.args || "";
+        try { const a = JSON.parse(args); args = a.command ?? a.file ?? args; } catch {}
+        line(`  ${DIM}${t}${R} ${BLUE}⚡${R} ${PURPLE}${trunc(e.agent, 14)}${R} ${e.tool}: ${trunc(args, (process.stdout.columns || 100) - 42)}`);
+        break;
+      }
+      case "result": {
+        const ok = e.ok !== false;
+        line(`  ${DIM}${t}${R} ${ok ? GREEN + "✓" : RED + "✗"}${R} ${DIM}${trunc((e.output || "").replace(/\n/g, " "), (process.stdout.columns || 100) - 24)}${R}`);
+        break;
+      }
+      case "llm":
+        line(`  ${DIM}${t}${R} 🧠 ${trunc(e.model, 26)} ${DIM}↑${e.prompt_tokens} ↓${e.completion_tokens}${R}`);
+        break;
+      case "run-start":
+        line(`  ${DIM}${t}${R} ${B}▶ ${e.agent}${R} 接任务 [${e.project}] ${DIM}${trunc(e.task, 50)}${R}`);
+        break;
+      case "run-done":
+        line(`  ${DIM}${t}${R} ${GREEN}■ 完成${R} [${e.project}] ${e.steps}步 ${e.total_tokens}tok`);
+        break;
+      default:
+        line(`  ${DIM}${t}${R} ${trunc(e.type, 90)}`);
+    }
+  }
+  process.stdout.write(out);
+}
+
+// raw mode keyboard
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on("data", k => { if (k.toString() === "q" || k.toString() === "\u0003") { console.log("\x1b[?25h\x1b[2J\x1b[H"); process.exit(0); } });
+}
+process.stdout.write("\x1b[?25l"); // hide cursor
+const tick = () => { try { draw(); } catch {} };
+tick();
+setInterval(tick, 2000);

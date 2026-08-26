@@ -10,6 +10,7 @@
 package main
 
 import (
+	crand "crypto/rand"
 	"bufio"
 	"bytes"
 	"crypto/tls"
@@ -139,14 +140,36 @@ func loadAuthKeys() map[string]string {
 	return keys
 }
 
+func loadKeysFile() map[string]string {
+	keys := map[string]string{}
+	data, err := os.ReadFile(filepath.Join(home, ".local/share/opencode/company/keys.json"))
+	if err != nil {
+		return keys
+	}
+	var m map[string]string
+	if json.Unmarshal(data, &m) == nil {
+		for k, v := range m {
+			keys[k] = v
+		}
+	}
+	return keys
+}
+
 func providers() map[string]provider {
 	auth := loadAuthKeys()
+	fileKeys := loadKeysFile()
+	dsKey := os.Getenv("DEEPSEEK_API_KEY")
+	if dsKey == "" {
+		dsKey = fileKeys["deepseek"]
+	}
 	pm := map[string]provider{
 		"zen": {name: "zen", base: "https://opencode.ai/zen/v1", key: os.Getenv("OPENCODE_API_KEY")},
 		"kilo": {name: "kilo", base: "https://api.kilo.ai/api/gateway",
 			key: auth["kilo"]},
 		"openrouter": {name: "openrouter", base: "https://openrouter.ai/api/v1",
 			key: auth["openrouter"]},
+		"deepseek": {name: "deepseek", base: "https://api.deepseek.com/v1",
+			key: dsKey},
 	}
 	if k := os.Getenv("KILO_API_KEY"); k != "" {
 		pm["kilo"] = provider{"kilo", "https://api.kilo.ai/api/gateway", k}
@@ -334,6 +357,7 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
+	Model  string `json:"model"`
 	Choices []struct {
 		Message      message `json:"message"`
 		FinishReason string  `json:"finish_reason"`
@@ -353,6 +377,63 @@ func (c *chatResponse) totalTokens() int {
 		return u.TotalTokens
 	}
 	return 0
+}
+
+func (c *chatResponse) promptTokens() int {
+	var u struct {
+		PromptTokens int `json:"prompt_tokens"`
+	}
+	if json.Unmarshal(c.Usage, &u) == nil {
+		return u.PromptTokens
+	}
+	return 0
+}
+
+func (c *chatResponse) completionTokens() int {
+	var u struct {
+		CompletionTokens int `json:"completion_tokens"`
+	}
+	if json.Unmarshal(c.Usage, &u) == nil {
+		return u.CompletionTokens
+	}
+	return 0
+}
+
+// ---------------- activity transparency log -----------------
+
+var runID = func() string { return fmt.Sprintf("%08x", cryptoRand32()) }()
+
+func cryptoRand32() uint32 {
+	var b [4]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return uint32(time.Now().UnixNano())
+	}
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+// activity writes one JSONL event to company/activity.jsonl — full transparency feed.
+func activity(agent, project, typ string, fields map[string]interface{}) {
+	ev := map[string]interface{}{
+		"ts":      time.Now().UTC().Format(time.RFC3339),
+		"run":     runID,
+		"agent":   agent,
+		"project": project,
+		"type":    typ,
+	}
+	for k, v := range fields {
+		ev[k] = v
+	}
+	line, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	f, ferr := os.OpenFile(filepath.Join(home, ".local/share/opencode/company/activity.jsonl"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if ferr != nil {
+		return
+	}
+	defer f.Close()
+	f.Write(append(line, '\n'))
 }
 
 type toolSchema struct {
@@ -749,14 +830,21 @@ func agentLoop(pm map[string]provider, agents map[string]*agentDef, a *agentDef,
 
 	msgs := []message{{Role: "system", Content: sys}, {Role: "user", Content: userTask}}
 	tools := builtinTools()
+	project := filepath.Base(cwd)
+	activity(a.Name, project, "run-start", map[string]interface{}{"task": truncate(userTask)})
 	final := ""
 	for step := 0; step < steps; step++ {
 		debug.SetGCPercent(40)
 		req := chatRequest{Messages: msgs, Tools: tools, MaxTokens: 8192, Temperature: 0.4}
 		cr, err := chatCompletion(pm, a.Model, req)
 		if err != nil {
+			activity(a.Name, project, "llm-error", map[string]interface{}{"error": truncate(err.Error())})
 			return final, fmt.Errorf("step %d: %v", step, err)
 		}
+		activity(a.Name, project, "llm", map[string]interface{}{
+			"model": cr.Model, "step": step + 1,
+			"prompt_tokens": cr.promptTokens(), "completion_tokens": cr.completionTokens(),
+		})
 		msg := cr.Choices[0].Message
 		content := ""
 		switch c := msg.Content.(type) {
@@ -775,6 +863,8 @@ func agentLoop(pm map[string]provider, agents map[string]*agentDef, a *agentDef,
 		if len(msg.ToolCalls) == 0 {
 			final = content
 			logf("[loop] done after %d steps (%d tokens)", step+1, cr.totalTokens())
+			activity(a.Name, project, "run-done", map[string]interface{}{
+				"steps": step + 1, "total_tokens": cr.totalTokens(), "summary": truncate(content)})
 			return final, nil
 		}
 		assistant := message{Role: "assistant", Content: content, ToolCalls: msg.ToolCalls}
@@ -783,6 +873,8 @@ func agentLoop(pm map[string]provider, agents map[string]*agentDef, a *agentDef,
 			var args map[string]interface{}
 			json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			logf("[tool] %s %s", tc.Function.Name, tc.Function.Arguments)
+			activity(a.Name, project, "tool", map[string]interface{}{
+				"tool": tc.Function.Name, "args": truncate(tc.Function.Arguments)})
 			out, err := runTool(ctx, tc.Function.Name, args)
 			result := out
 			if err != nil {
@@ -794,6 +886,9 @@ func agentLoop(pm map[string]provider, agents map[string]*agentDef, a *agentDef,
 			if result == "" {
 				result = "(no output)"
 			}
+			ok := err == nil
+			activity(a.Name, project, "result", map[string]interface{}{
+				"tool": tc.Function.Name, "ok": ok, "output": truncate(result)})
 			msgs = append(msgs, message{Role: "tool", ToolCallID: tc.ID, Content: result})
 		}
 		pruneHistory(msgs)
