@@ -13,6 +13,7 @@ import (
 	"github.com/hanley-liu/opc-framework/internal/config"
 	"github.com/hanley-liu/opc-framework/internal/engine"
 	"github.com/hanley-liu/opc-framework/internal/schema"
+	"github.com/charmbracelet/bubbletea"
 	"github.com/hanley-liu/opc-framework/internal/tui"
 )
 
@@ -20,7 +21,7 @@ var version = "1.0.0"
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		runChat()
 		return
 	}
 	cmd := os.Args[1]
@@ -28,7 +29,7 @@ func main() {
 
 	switch cmd {
 	case "version", "--version", "-v":
-		fmt.Println("opc-framework", version)
+		fmt.Println("opc", version)
 
 	case "run":
 		var agentID, dir, model, task string
@@ -67,7 +68,7 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "serve", "start", "tui":
+	case "serve", "start", "tui", "chat":
 		cfg := loadConfig()
 		eng := engine.New(cfg)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -84,7 +85,9 @@ func main() {
 			os.Exit(0)
 		}()
 
-		tui.Run(eng)
+		tui.New(eng)
+		p := tea.NewProgram(tui.New(eng), tea.WithAltScreen(), tea.WithMouseCellMotion())
+		_, _ = p.Run()
 
 	case "agents":
 		cfg := loadConfig()
@@ -136,3 +139,16 @@ func trunc(s string, n int) string {
 }
 
 var _ = strings.TrimSpace
+func runChat() {
+	cfg := loadConfig()
+	eng := engine.New(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := eng.Start(ctx); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() { <-sigCh; cancel(); eng.Stop(); fmt.Println(); os.Exit(0) }()
+	tui.New(eng)
+		p := tea.NewProgram(tui.New(eng), tea.WithAltScreen(), tea.WithMouseCellMotion())
+		_, _ = p.Run()
+}

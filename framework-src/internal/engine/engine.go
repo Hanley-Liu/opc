@@ -217,3 +217,17 @@ func parseArgs(s string) map[string]any {
 
 // 编译期引用（config 用于未来配置热加载）
 var _ = config.DataDir
+// Config 访问配置
+func (e *Engine) Config() *schema.Config {
+	e.mu.RLock(); defer e.mu.RUnlock()
+	return e.cfg
+}
+
+// PushError 外部错误注入（异步任务 goroutine 用）
+func (e *Engine) PushError(err error) {
+	if err == nil { return }
+	e.emit(schema.ActivityEvent{
+		Timestamp: time.Now(), AgentID: "system",
+		Type: "llm-error", Error: err.Error(),
+	})
+}
