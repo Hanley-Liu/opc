@@ -1,0 +1,16 @@
+[Unit]
+Description=OPC Perpetual Engine (project pool loop)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/home/LSH
+Environment=PATH=/home/LSH/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=GITHUB_TOKEN=__GITHUB_TOKEN__
+ExecStartPre=/bin/rm -f /tmp/opc-engine.lock
+ExecStart=/home/LSH/.local/bin/opc-engine supervise
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -412,6 +412,20 @@ func cryptoRand32() uint32 {
 }
 
 // activity writes one JSONL event to company/activity.jsonl — full transparency feed.
+var jsonEventsOut = os.Getenv("OPC_JSON") == "1" || containsFlag(os.Args, "--json")
+
+func containsFlag(args []string, f string) bool {
+	for _, a := range args {
+		if a == f {
+			return true
+		}
+	}
+	return false
+}
+
+// activity 同时写审计文件 + （--json 时）向 stdout 推 JSONL 事件流
+var runStart time.Time
+
 func activity(agent, project, typ string, fields map[string]interface{}) {
 	ev := map[string]interface{}{
 		"ts":      time.Now().UTC().Format(time.RFC3339),
@@ -427,8 +441,15 @@ func activity(agent, project, typ string, fields map[string]interface{}) {
 	if err != nil {
 		return
 	}
-	f, ferr := os.OpenFile(filepath.Join(home, ".local/share/opencode/company/activity.jsonl"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if jsonEventsOut {
+		fmt.Println(string(line))
+	}
+	actPath := filepath.Join(home, ".local/share/opencode/company/activity.jsonl")
+	if st, serr := os.Stat(actPath); serr == nil && st.Size() > 32<<20 { // 32MB 轮转
+		os.Rename(actPath, actPath+".old")
+		os.Remove(actPath + ".old.old")
+	}
+	f, ferr := os.OpenFile(actPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if ferr != nil {
 		return
 	}
@@ -864,7 +885,9 @@ func agentLoop(pm map[string]provider, agents map[string]*agentDef, a *agentDef,
 			final = content
 			logf("[loop] done after %d steps (%d tokens)", step+1, cr.totalTokens())
 			activity(a.Name, project, "run-done", map[string]interface{}{
-				"steps": step + 1, "total_tokens": cr.totalTokens(), "summary": truncate(content)})
+				"steps": step + 1, "summary": truncate(content), "output": truncate(content),
+				"model": cr.Model, "duration": time.Since(runStart).Milliseconds(),
+				"tokens": map[string]int{"prompt": cr.promptTokens(), "completion": cr.completionTokens(), "total": cr.totalTokens()}})
 			return final, nil
 		}
 		assistant := message{Role: "assistant", Content: content, ToolCalls: msg.ToolCalls}
@@ -994,22 +1017,31 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 	start := time.Now()
+	runStart = start
 	agents := loadAgents()
 	a := agents[agentName]
 	if a == nil {
-		fmt.Fprintf(os.Stderr, "unknown agent %q; have: ", agentName)
-		for n := range agents {
-			fmt.Fprint(os.Stderr, n+" ")
+		// 零决策阻塞：未知角色自动回退 COO(build)
+		if fb, ok := agents["build"]; ok {
+			fmt.Fprintf(os.Stderr, "[fallback] unknown agent %q -> build\n", agentName)
+			a = fb
+		} else {
+			fmt.Fprintf(os.Stderr, "unknown agent %q; have: ", agentName)
+			for n := range agents {
+				fmt.Fprint(os.Stderr, n+" ")
+			}
+			fmt.Fprintln(os.Stderr)
+			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr)
-		os.Exit(1)
 	}
 	if model != "" {
 		a.Model = model
 	}
 	pm := providers()
 	logger := func(f string, xs ...interface{}) {
-		fmt.Printf("\x1b[36m[opc]\x1b[0m "+f+"\n", xs...)
+		if !jsonEventsOut {
+			fmt.Printf("\x1b[36m[opc]\x1b[0m "+f+"\n", xs...)
+		}
 	}
 	out, err := agentLoop(pm, agents, a, task, abs, 0, logger)
 	dur := time.Since(start).Round(time.Second)
@@ -1017,7 +1049,7 @@ func cmdRun(args []string) {
 	if err != nil {
 		fmt.Printf("\x1b[31m[error]\x1b[0m %v\n", err)
 	}
-	if out != "" {
+	if out != "" && !jsonEventsOut {
 		fmt.Println(out)
 	}
 	if err != nil {

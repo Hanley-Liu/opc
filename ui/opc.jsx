@@ -91,6 +91,12 @@ function Thinking() {
   return <Box paddingLeft={2}><Text color={C.muted}>⟳ 编排中…</Text></Box>;
 }
 
+function trimLines(s, maxLines) {
+  const lines = s.split("\n");
+  if (lines.length <= maxLines) return s;
+  return lines.slice(0, maxLines).join("\n") + `\n… (+${lines.length - maxLines} 行，全文见 activity.jsonl)`;
+}
+
 function prettyParams(raw) {
   try {
     const m = JSON.parse(raw);
@@ -159,15 +165,16 @@ function App({ initialDir }) {
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
   const [tok, setTok] = useState(0);
   const [tick, setTick] = useState(0);
+  const pendingToolRef = React.useRef(null);
 
   const info = (text) => ({ id: nid(), type: "info", text });
 
   // 共享事件处理器：主任务与 /new 构建共用同一渲染管道
-  let pendingToolRef = null;
+
   const flushPending = () => {
     if (pendingToolRef) {
       push({ ...pendingToolRef, hasResult: true, ok: false, output: "(无结果)" });
-      pendingToolRef = null; setLive(null);
+      pendingToolRef.current = null; setLive(null);
     }
   };
   const handleEngineEvent = (ev) => {
@@ -178,12 +185,12 @@ function App({ initialDir }) {
         break;
       case "tool":
         flushPending();
-        pendingToolRef = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
-        setLive(pendingToolRef);
+        pendingToolRef.current = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
+        setLive(pendingToolRef.current);
         break;
       case "result": {
-        if (pendingToolRef) {
-          const t = pendingToolRef; pendingToolRef = null;
+        if (pendingToolRef.current) {
+          const t = pendingToolRef.current; pendingToolRef.current = null;
           push({ ...t, hasResult: true, ok: ev.status === "success", output: ev.output });
           setLive(null);
         } else {
@@ -201,11 +208,13 @@ function App({ initialDir }) {
         push({ id: nid(), type: "assistant", body,
                meta: `${mdl} · ↑${tk.prompt} ↓${tk.completion} tok · ${ev.duration||0}ms` });
         setTok(t => t + (tk.total||0));
+        setBusy(false);
         break;
       }
       case "llm-error":
         flushPending();
         push({ id: nid(), type: "error", text: "模型错误: " + ev.error });
+        setBusy(false);
         break;
       default:
         break;
@@ -377,9 +386,14 @@ function bootstrap(name, requirement) {
         handleEngineEvent(ev);
       }
     });
-    child.on("close", code => {
-      if (code !== 0) push({ id: nid(), type: "error",
-        text: `任务退出 code=${code}（详见 activity.jsonl）` });
+    child.on("close", () => {
+      flushPending();
+      setBusy(false);
+    });
+    child.on("error", (e) => {
+      flushPending();
+      push({ id: nid(), type: "error", text: "启动失败: " + e.message });
+      setBusy(false);
     });
   }, [initialDir, push, handleEngineEvent]);
   // ─────────── 键盘输入 ───────────
@@ -429,7 +443,7 @@ function bootstrap(name, requirement) {
 
   return (
     <Box flexDirection="column">
-      {entries.slice(-12).map(e => <Box key={e.id}>{renderEntry(e)}</Box>)}
+      {entries.slice(-8).map(e => <Box key={e.id}>{renderEntry(e)}</Box>)}
 
       {live ? (
         <Box paddingLeft={2}>

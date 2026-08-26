@@ -188,6 +188,18 @@ for i in json.load(sys.stdin):
     lr=time.strftime('%H:%M',time.localtime(i.get('last_run',0))) if i.get('last_run') else 'never'
     print(f\"  {i['id']:16} {i.get('status','active'):8} fails={i.get('fail_streak',0)} last={lr}\")" 2>/dev/null
     ;;
+  supervise)
+    # systemd 前台监督模式：循环崩溃自动拉起
+    set_running true
+    echo $$ > "$LOCK"
+    while :; do
+      "$0" _loop >>"$COMPANY/logs/engine-stdout.log" 2>&1 &
+      LOOP_PID=$!
+      wait $LOOP_PID 2>/dev/null
+      is_running || break
+      sleep 5
+    done
+    ;;
   _loop)
     CYCLE_COUNT=0
     log "engine loop started pid=$$"

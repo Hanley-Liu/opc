@@ -133,12 +133,12 @@ function App({ initialDir }) {
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
   const [tok, setTok] = useState(0);
   const [tick, setTick] = useState(0);
+  const pendingToolRef = React.useRef(null);
   const info = (text) => ({ id: nid(), type: "info", text });
-  let pendingToolRef = null;
   const flushPending = () => {
     if (pendingToolRef) {
       push({ ...pendingToolRef, hasResult: true, ok: false, output: "(\u65E0\u7ED3\u679C)" });
-      pendingToolRef = null;
+      pendingToolRef.current = null;
       setLive(null);
     }
   };
@@ -150,13 +150,13 @@ function App({ initialDir }) {
         break;
       case "tool":
         flushPending();
-        pendingToolRef = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
-        setLive(pendingToolRef);
+        pendingToolRef.current = { id: nid(), type: "tool", tool: ev.tool, args: ev.args };
+        setLive(pendingToolRef.current);
         break;
       case "result": {
-        if (pendingToolRef) {
-          const t = pendingToolRef;
-          pendingToolRef = null;
+        if (pendingToolRef.current) {
+          const t = pendingToolRef.current;
+          pendingToolRef.current = null;
           push({ ...t, hasResult: true, ok: ev.status === "success", output: ev.output });
           setLive(null);
         } else {
@@ -182,11 +182,13 @@ function App({ initialDir }) {
           meta: `${mdl} \xB7 \u2191${tk.prompt} \u2193${tk.completion} tok \xB7 ${ev.duration || 0}ms`
         });
         setTok((t) => t + (tk.total || 0));
+        setBusy(false);
         break;
       }
       case "llm-error":
         flushPending();
         push({ id: nid(), type: "error", text: "\u6A21\u578B\u9519\u8BEF: " + ev.error });
+        setBusy(false);
         break;
       default:
         break;
@@ -388,12 +390,14 @@ function App({ initialDir }) {
         handleEngineEvent(ev);
       }
     });
-    child.on("close", (code) => {
-      if (code !== 0) push({
-        id: nid(),
-        type: "error",
-        text: `\u4EFB\u52A1\u9000\u51FA code=${code}\uFF08\u8BE6\u89C1 activity.jsonl\uFF09`
-      });
+    child.on("close", () => {
+      flushPending();
+      setBusy(false);
+    });
+    child.on("error", (e) => {
+      flushPending();
+      push({ id: nid(), type: "error", text: "\u542F\u52A8\u5931\u8D25: " + e.message });
+      setBusy(false);
     });
   }, [initialDir, push, handleEngineEvent]);
   useInput((ch, key) => {
@@ -481,7 +485,7 @@ function App({ initialDir }) {
   const st = companyState();
   const breath = tick % 2 === 0 ? "\u25CF" : "\u25CB";
   const engColor = busy ? C.warn : st.running ? C.success : C.muted;
-  return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, entries.slice(-12).map((e) => /* @__PURE__ */ React.createElement(Box, { key: e.id }, renderEntry(e))), live ? /* @__PURE__ */ React.createElement(Box, { paddingLeft: 2 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.tool, bold: true }, "\u26A1 "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, live.tool, " "), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(prettyParams(live.args), 72)))) : null, busy ? /* @__PURE__ */ React.createElement(Thinking, null) : null, /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), busy ? null : /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", /* @__PURE__ */ React.createElement(Text, { color: engColor }, breath), " \u5F15\u64CE:" + (st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62") + " \xB7 \u6C60:" + st.active.length + "/" + st.pool.length, " \xB7 " + trunc(model, 30) + " \xB7 \u2191\u2193" + tok + " tok \xB7 Enter \u6D3E\u6D3B \xB7 Ctrl+C \u9000\u51FA"));
+  return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, entries.slice(-8).map((e) => /* @__PURE__ */ React.createElement(Box, { key: e.id }, renderEntry(e))), live ? /* @__PURE__ */ React.createElement(Box, { paddingLeft: 2 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.tool, bold: true }, "\u26A1 "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, live.tool, " "), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(prettyParams(live.args), 72)))) : null, busy ? /* @__PURE__ */ React.createElement(Thinking, null) : null, /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), busy ? null : /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", /* @__PURE__ */ React.createElement(Text, { color: engColor }, breath), " \u5F15\u64CE:" + (st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62") + " \xB7 \u6C60:" + st.active.length + "/" + st.pool.length, " \xB7 " + trunc(model, 30) + " \xB7 \u2191\u2193" + tok + " tok \xB7 Enter \u6D3E\u6D3B \xB7 Ctrl+C \u9000\u51FA"));
 }
 var idx = process.argv.indexOf("--dir");
 var dirArg = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();
