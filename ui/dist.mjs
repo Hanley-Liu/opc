@@ -84,10 +84,15 @@ function route(input) {
   const low = input.toLowerCase();
   if (/测试|test/.test(low)) return "tester";
   if (/架构/.test(low)) return "architect";
-  if (/审查|review/.test(low)) return "reviewer";
-  if (/部署|发布|deploy/.test(low)) return "operator";
-  if (/规划|计划/.test(low)) return "planner";
-  return "orchestrator";
+  if (/安全|漏洞|security/.test(low)) return "security-auditor";
+  if (/文档|readme|readme/.test(low)) return "docs-writer";
+  if (/营销|推广|marketing|涨星|star/.test(low)) return "marketing-growth";
+  if (/发布|上线|push/.test(low)) return "github-agent";
+  if (/部署|运维|deploy/.test(low)) return "devops-release";
+  if (/规划|需求|prd/.test(low)) return "product-manager";
+  if (/法务|许可|license|合规/.test(low)) return "legal-compliance";
+  if (/数据|统计|分析/.test(low)) return "analyst";
+  return "build";
 }
 function resolveDir(task, initialDir) {
   try {
@@ -192,9 +197,13 @@ function App({ initialDir }) {
           break;
         case "run-done": {
           flushTool();
-          const meta = `${ev.model} \xB7 \u2191${ev.tokens?.prompt || 0} \u2193${ev.tokens?.completion || 0} tok \xB7 ${ev.duration || 0}ms`;
-          push({ id: nid(), type: "assistant", body: (ev.output || "").trim() || "(\u65E0\u8F93\u51FA)", meta });
-          setTok((t) => t + (ev.tokens?.total || 0));
+          const body = (ev.output || ev.summary || "").trim() || "(\u65E0\u8F93\u51FA)";
+          const mdl = ev.model || model;
+          const tk = ev.tokens || { prompt: 0, completion: 0, total: ev.total_tokens || 0 };
+          setModel(mdl);
+          const meta = `${mdl} \xB7 \u2191${tk.prompt} \u2193${tk.completion} tok \xB7 ${ev.duration || 0}ms`;
+          push({ id: nid(), type: "assistant", body, meta });
+          setTok((t) => t + (tk.total || 0));
           break;
         }
         case "llm-error":

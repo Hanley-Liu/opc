@@ -106,14 +106,20 @@ function prettyParams(raw) {
   return raw;
 }
 
+// 路由到 opencode.jsonc 里的真实员工 ID
 function route(input) {
   const low = input.toLowerCase();
   if (/测试|test/.test(low)) return "tester";
   if (/架构/.test(low)) return "architect";
-  if (/审查|review/.test(low)) return "reviewer";
-  if (/部署|发布|deploy/.test(low)) return "operator";
-  if (/规划|计划/.test(low)) return "planner";
-  return "orchestrator";
+  if (/安全|漏洞|security/.test(low)) return "security-auditor";
+  if (/文档|readme|readme/.test(low)) return "docs-writer";
+  if (/营销|推广|marketing|涨星|star/.test(low)) return "marketing-growth";
+  if (/发布|上线|push/.test(low)) return "github-agent";
+  if (/部署|运维|deploy/.test(low)) return "devops-release";
+  if (/规划|需求|prd/.test(low)) return "product-manager";
+  if (/法务|许可|license|合规/.test(low)) return "legal-compliance";
+  if (/数据|统计|分析/.test(low)) return "analyst";
+  return "build"; // COO 兜底
 }
 
 // 任务里提到池内项目名 → 自动切到该项目目录干活
@@ -208,9 +214,13 @@ function App({ initialDir }) {
           break;
         case "run-done": {
           flushTool();
-          const meta = `${ev.model} · ↑${ev.tokens?.prompt||0} ↓${ev.tokens?.completion||0} tok · ${ev.duration||0}ms`;
-          push({ id: nid(), type: "assistant", body: (ev.output||"").trim() || "(无输出)", meta });
-          setTok(t => t + (ev.tokens?.total||0));
+          const body = (ev.output || ev.summary || "").trim() || "(无输出)";
+          const mdl = ev.model || model;
+          const tk = ev.tokens || { prompt: 0, completion: 0, total: ev.total_tokens || 0 };
+          setModel(mdl);
+          const meta = `${mdl} · ↑${tk.prompt} ↓${tk.completion} tok · ${ev.duration||0}ms`;
+          push({ id: nid(), type: "assistant", body, meta });
+          setTok(t => t + (tk.total||0));
           break;
         }
         case "llm-error":
