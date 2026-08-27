@@ -366,11 +366,13 @@ function App({ initialDir }) {
     }
   }
 
-  // ─── 键盘监听 ───
+  // ─── 键盘监听（稳定引用，避免竞态丢键）───
   const S = useRef({});
   S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
 
-  useInput((ch, key) => {
+  // 用 ref 存 handler，useInput 只挂一次
+  const handlerRef = useRef(null);
+  handlerRef.current = (ch, key) => {
     const s = S.current;
 
     // Ctrl+C — 交给 Ink exitOnCtrlC
@@ -426,7 +428,11 @@ function App({ initialDir }) {
     if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
       setInput(i => i + ch);
     }
-  });
+  };
+
+  // 稳定引用：useInput 只注册一次，内部通过 ref 调最新 handler
+  const stableInput = useCallback((ch, key) => { handlerRef.current(ch, key); }, []);
+  useInput(stableInput);
 
   function dialogItems(type) {
     if (type === "proj") {

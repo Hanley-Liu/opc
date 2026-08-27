@@ -396,7 +396,8 @@ function App({ initialDir }) {
   }
   const S = useRef({});
   S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
-  useInput((ch, key) => {
+  const handlerRef = useRef(null);
+  handlerRef.current = (ch, key) => {
     const s = S.current;
     if (key.ctrl && (ch === "c" || ch === "C")) return;
     if (s.dialog) {
@@ -477,7 +478,11 @@ function App({ initialDir }) {
     if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
       setInput((i) => i + ch);
     }
-  });
+  };
+  const stableInput = useCallback((ch, key) => {
+    handlerRef.current(ch, key);
+  }, []);
+  useInput(stableInput);
   function dialogItems(type) {
     if (type === "proj") {
       const st2 = companyState();
