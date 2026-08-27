@@ -8,23 +8,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 var C = {
-  primary: "#7aa2f7",
-  secondary: "#bb9af7",
+  // 办公室色调（Tokyo Night）
+  floor: "#1a1b26",
+  // 地板/背景
+  wall: "#24283b",
+  // 墙壁/面板
+  desk: "#414868",
+  // 桌子/分隔线
   text: "#c0caf5",
+  // 正文
   muted: "#565f89",
-  error: "#f7768e",
+  // 灰色文字
+  accent: "#7aa2f7",
+  // 强调色（蓝色）
   success: "#9ece6a",
+  // 在线/完成（绿色）
   warn: "#e0af68",
+  // 工作中（黄色）
+  error: "#f7768e",
+  // 错误/离线（红色）
   tool: "#7dcfff",
-  border: "#3d445c",
-  hiBg: "#292e42",
-  panel: "#16161e"
+  // 工具调用（青色）
+  ceo: "#bb9af7",
+  // CEO（紫色）
+  border: "#3d445c"
+  // 边框
 };
 var COMPANY = path.join(os.homedir(), ".local/share/opencode/company");
 var PROJECTS = path.join(os.homedir(), ".local/share/opencode/projects");
-var MAX_RESULT = 8;
-var idc = 0;
-var nid = () => `e${++idc}`;
 var readJSON = (f, d) => {
   try {
     return JSON.parse(fs.readFileSync(f, "utf8"));
@@ -37,61 +48,80 @@ var trunc = (s, w) => {
   const r = [...s];
   return r.length <= w ? s : r.slice(0, Math.max(1, w - 1)).join("") + "\u2026";
 };
-var AGENTS = [
-  ["build", "Sisyphus", "COO\xB7\u7F16\u6392"],
-  ["product-manager", "\u4EA7\u54C1\u7ECF\u7406", "\u9700\u6C42PRD"],
-  ["architect", "\u67B6\u6784\u5E08", "\u7CFB\u7EDF\u8BBE\u8BA1"],
-  ["developer", "\u5F00\u53D1\u8005", "\u7F16\u7801\u5B9E\u73B0"],
-  ["tester", "\u6D4B\u8BD5\u5458", "\u8D28\u91CF\u4FDD\u8BC1"],
-  ["security-auditor", "\u5B89\u5168\u5BA1\u8BA1", "\u6F0F\u6D1E\u626B\u63CF"],
-  ["docs-writer", "\u6587\u6863", "README"],
-  ["marketing-growth", "\u589E\u957F\u8425\u9500", "\u6DA8\u661F\u63A8\u5E7F"],
-  ["github-agent", "\u53D1\u5E03\u5B98", "git\u63A8\u9001"],
-  ["devops-release", "\u53D1\u5E03\u5DE5\u7A0B", "\u7248\u672CCI"],
-  ["analyst", "\u5206\u6790\u5E08", "\u6570\u636E\u6D1E\u5BDF"],
-  ["legal-compliance", "\u6CD5\u52A1", "\u5408\u89C4"]
+var padR = (s, w) => {
+  s = String(s ?? "");
+  return s + " ".repeat(Math.max(0, w - [...s].length));
+};
+var ROSTER = [
+  { id: "build", name: "Sisyphus", role: "COO\xB7\u7F16\u6392", emoji: "\u{1F9ED}", color: "#bb9af7" },
+  { id: "product-manager", name: "\u4EA7\u54C1\u7ECF\u7406", role: "\u9700\u6C42PRD", emoji: "\u{1F4CB}", color: "#9ece6a" },
+  { id: "architect", name: "\u67B6\u6784\u5E08", role: "\u7CFB\u7EDF\u8BBE\u8BA1", emoji: "\u{1F3D7}", color: "#7dcfff" },
+  { id: "developer", name: "\u5F00\u53D1\u8005", role: "\u7F16\u7801\u5B9E\u73B0", emoji: "\u{1F4BB}", color: "#e0af68" },
+  { id: "tester", name: "\u6D4B\u8BD5\u5458", role: "\u8D28\u91CF\u4FDD\u8BC1", emoji: "\u{1F50D}", color: "#ff9e64" },
+  { id: "security-auditor", name: "\u5B89\u5168\u5BA1\u8BA1", role: "\u6F0F\u6D1E\u626B\u63CF", emoji: "\u{1F6E1}", color: "#f7768e" },
+  { id: "docs-writer", name: "\u6587\u6863\u5DE5\u7A0B\u5E08", role: "README", emoji: "\u{1F4DD}", color: "#73daca" },
+  { id: "marketing-growth", name: "\u589E\u957F\u8425\u9500", role: "\u6DA8\u661F\u63A8\u5E7F", emoji: "\u{1F4E2}", color: "#ff007f" },
+  { id: "github-agent", name: "\u53D1\u5E03\u5B98", role: "git\u63A8\u9001", emoji: "\u{1F680}", color: "#c0caf5" },
+  { id: "devops-release", name: "\u53D1\u5E03\u5DE5\u7A0B", role: "\u7248\u672CCI", emoji: "\u2699\uFE0F", color: "#2ac3de" },
+  { id: "analyst", name: "\u5206\u6790\u5E08", role: "\u6570\u636E\u6D1E\u5BDF", emoji: "\u{1F4CA}", color: "#b4f9f8" },
+  { id: "legal-compliance", name: "\u6CD5\u52A1", role: "\u5408\u89C4", emoji: "\u2696\uFE0F", color: "#a9b1d6" }
 ];
+function getRoster(id) {
+  return ROSTER.find((r) => r.id === id) || { id, name: id || "\u672A\u77E5", role: "", emoji: "\u2753", color: C.muted };
+}
 function companyState() {
   const pool = readJSON(path.join(COMPANY, "pool.json"), []);
   const eng = readJSON(path.join(COMPANY, "engine.json"), { running: false });
   return { pool, active: pool.filter((p) => p.status === "active"), running: !!eng.running };
 }
-function trimLines(s, maxLines) {
-  const lines = String(s).split("\n");
-  if (lines.length <= maxLines) return s;
-  return lines.slice(0, maxLines).join("\n") + "\n\u2026 (+" + (lines.length - maxLines) + " \u884C\uFF0C\u5168\u6587\u89C1\u5BA1\u8BA1\u65E5\u5FD7)";
+function progressBar(pct, w = 16) {
+  const filled = Math.round(pct / 100 * w);
+  return "\u2588".repeat(filled) + "\u2591".repeat(w - filled);
 }
-var ROSTER = {
-  "build": { name: "Sisyphus", role: "COO\xB7\u7F16\u6392", color: "#bb9af7" },
-  "product-manager": { name: "\u4EA7\u54C1\u7ECF\u7406", role: "\u9700\u6C42PRD", color: "#9ece6a" },
-  "architect": { name: "\u67B6\u6784\u5E08", role: "\u7CFB\u7EDF\u8BBE\u8BA1", color: "#7dcfff" },
-  "developer": { name: "\u5F00\u53D1\u8005", role: "\u7F16\u7801\u5B9E\u73B0", color: "#e0af68" },
-  "tester": { name: "\u6D4B\u8BD5\u5458", role: "\u8D28\u91CF\u4FDD\u8BC1", color: "#ff9e64" },
-  "security-auditor": { name: "\u5B89\u5168\u5BA1\u8BA1", role: "\u6F0F\u6D1E\u626B\u63CF", color: "#f7768e" },
-  "docs-writer": { name: "\u6587\u6863\u5DE5\u7A0B\u5E08", role: "README", color: "#73daca" },
-  "marketing-growth": { name: "\u589E\u957F\u8425\u9500", role: "\u6DA8\u661F\u63A8\u5E7F", color: "#ff007f" },
-  "github-agent": { name: "\u53D1\u5E03\u5B98", role: "git\u63A8\u9001", color: "#c0caf5" },
-  "devops-release": { name: "\u53D1\u5E03\u5DE5\u7A0B", role: "\u7248\u672CCI", color: "#2ac3de" },
-  "analyst": { name: "\u5206\u6790\u5E08", role: "\u6570\u636E\u6D1E\u5BDF", color: "#b4f9f8" },
-  "legal-compliance": { name: "\u6CD5\u52A1", role: "\u5408\u89C4", color: "#a9b1d6" }
-};
-function rosterOf(agentId) {
-  return ROSTER[agentId] || { name: agentId || "\u516C\u53F8", role: "", color: "#7aa2f7" };
-}
-function prettyParams(raw) {
-  try {
-    const m = JSON.parse(raw);
-    if (m.command) return "$ " + m.command.replace(/\n/g, " ");
-    if (m.path && m.old_string) return `${m.path} \u270E`;
-    if (m.path && m.content) return `${m.path} \u271A${String(m.content).length}B`;
-    if (m.path) return m.path;
-    if (m.pattern) return "/" + m.pattern;
-    if (m.agent) return `\u2192 ${m.agent}`;
-  } catch {
+function ActivityItem({ item, width }) {
+  const time = new Date(item.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const agent = getRoster(item.agent);
+  if (item.type === "system") {
+    return /* @__PURE__ */ React.createElement(Box, { width }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, time, " "), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(item.text, width - 8)));
   }
-  return raw;
+  if (item.type === "tool") {
+    const mark = item.ok === true ? "\u2713" : item.ok === false ? "\u2716" : "\u27F3";
+    const markColor = item.ok === true ? C.success : item.ok === false ? C.error : C.warn;
+    return /* @__PURE__ */ React.createElement(Box, { width }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, time, " "), /* @__PURE__ */ React.createElement(Text, { color: agent.color }, trunc(agent.name, 6), " "), /* @__PURE__ */ React.createElement(Text, { color: markColor, bold: true }, mark, " "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, item.tool, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, trunc(item.summary || "", width - 30)));
+  }
+  if (item.type === "assistant") {
+    return /* @__PURE__ */ React.createElement(Box, { width }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, time, " "), /* @__PURE__ */ React.createElement(Text, { color: agent.color, bold: true }, agent.emoji, " ", trunc(agent.name, 6), " "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, trunc(item.text, width - 30)));
+  }
+  return null;
 }
-function route(task) {
+function EmployeeDesk({ agent, status, task, progress, width }) {
+  const statusEmoji = status === "working" ? "\u{1F7E2}" : status === "waiting" ? "\u23F8" : status === "done" ? "\u2705" : "\u{1F4A4}";
+  const statusText = status === "working" ? "\u5DE5\u4F5C\u4E2D" : status === "waiting" ? "\u7B49\u5F85\u4E2D" : status === "done" ? "\u5DF2\u5B8C\u6210" : "\u7A7A\u95F2";
+  const statusColor = status === "working" ? C.success : status === "waiting" ? C.muted : status === "done" ? C.accent : C.muted;
+  return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width, paddingX: 1 }, /* @__PURE__ */ React.createElement(Box, null, /* @__PURE__ */ React.createElement(Text, { color: agent.color }, agent.emoji, " "), /* @__PURE__ */ React.createElement(Text, { color: agent.color, bold: true }, padR(agent.name, 8)), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, padR(agent.role, 8)), /* @__PURE__ */ React.createElement(Text, { color: statusColor }, statusEmoji, " ", statusText)), task ? /* @__PURE__ */ React.createElement(Box, { paddingLeft: 3 }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u2514\u2500 "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, trunc(task, width - 16)), progress !== void 0 ? /* @__PURE__ */ React.createElement(Text, { color: C.accent }, " ", progressBar(progress, 8), " ", progress, "%") : null) : null);
+}
+var COMMANDS = {
+  "/help": { desc: "\u67E5\u770B\u6240\u6709\u547D\u4EE4", usage: "/help" },
+  "/list": { desc: "\u5217\u51FA\u6240\u6709\u5458\u5DE5", usage: "/list" },
+  "/say": { desc: "\u8DDF\u5458\u5DE5\u8BF4\u8BDD", usage: "/say <\u5458\u5DE5\u540D> <\u6D88\u606F>" },
+  "/project": { desc: "\u7BA1\u7406\u9879\u76EE", usage: "/project list | /project focus <name>" },
+  "/new": { desc: "\u521B\u5EFA\u65B0\u9879\u76EE", usage: "/new <name> <\u9700\u6C42>" },
+  "/bill": { desc: "\u67E5\u770B\u8D26\u5355", usage: "/bill" },
+  "/history": { desc: "\u67E5\u770B\u5386\u53F2", usage: "/history" },
+  "/clear": { desc: "\u6E05\u7A7A\u6D3B\u52A8\u6D41", usage: "/clear" },
+  "/status": { desc: "\u67E5\u770B\u516C\u53F8\u72B6\u6001", usage: "/status" },
+  "/exit": { desc: "\u9000\u51FA", usage: "/exit" }
+};
+function parseCommand(input) {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) return { type: "task", text: trimmed };
+  const parts = trimmed.split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const args = parts.slice(1).join(" ");
+  if (!COMMANDS[cmd]) return { type: "error", text: `\u672A\u77E5\u547D\u4EE4: ${cmd}\uFF0C\u8F93\u5165 /help \u67E5\u770B\u5E2E\u52A9` };
+  return { type: "command", cmd, args };
+}
+function routeTask(task) {
   const low = task.toLowerCase();
   if (/测试|test/.test(low)) return "tester";
   if (/架构/.test(low)) return "architect";
@@ -103,99 +133,31 @@ function route(task) {
   if (/数据|统计/.test(low)) return "analyst";
   return "build";
 }
-function mdLite(text, w, textColor) {
-  const out = [];
-  let inCode = false;
-  for (let raw of String(text || "").split("\n")) {
-    if (raw.trim().startsWith("```")) {
-      inCode = !inCode;
-      continue;
-    }
-    const bold = (l) => l.replace(/\*\*(.+?)\*\*/g, "\x1B[1m$1\x1B[22m");
-    const styled = bold(raw);
-    if (inCode) out.push(lipglossText("  \u2502 " + trunc(styled, w - 6), C.tool));
-    else out.push(lipglossText(trunc(styled, w - 2), textColor));
-  }
-  return out;
-}
-function lipglossText(text, color) {
-  return /* @__PURE__ */ React.createElement(Text, { color }, text);
-}
-function EntryView({ e, w, expanded }) {
-  const nameW = 4;
-  if (e.kind === "user") {
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", marginBottom: 0 }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.secondary, bold: true }, "\u{1F451} CEO"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2500\u2500")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, wrap(e.text, Math.max(20, w - nameW))));
-  }
-  if (e.kind === "assistant") {
-    const r = rosterOf(e.agent);
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column" }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: r.color, bold: true }, "\u258C " + r.name), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " " + r.role + " \u2500\u2500 " + trunc(e.model || "", 20) + " \u2191" + (e.ptok || 0) + " \u2193" + (e.ctok || 0) + " tok")), /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW, flexDirection: "column" }, mdLite(e.text, Math.max(20, w - nameW), C.text)));
-  }
-  if (e.kind === "info") {
-    return /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\xB7 ", e.text));
-  }
-  if (e.kind === "error") {
-    return /* @__PURE__ */ React.createElement(Box, { paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, { color: C.error }, "\u2716 ", trunc(e.text, w - 6)));
-  }
-  if (e.kind === "tool") {
-    const mark = e.hasResult ? e.ok ? "\u2713" : "\u2716" : "\u27F3";
-    const markColor = e.hasResult ? e.ok ? C.success : C.error : C.warn;
-    const head = `${mark} \u26A1 ${e.tool}: ${trunc(prettyParams(e.args), Math.max(16, w - nameW - 14))}`;
-    return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: nameW }, /* @__PURE__ */ React.createElement(Text, null, /* @__PURE__ */ React.createElement(Text, { color: C.muted }, trunc(rosterOf(e.agent).name, 8) + " "), /* @__PURE__ */ React.createElement(Text, { color: markColor, bold: true }, mark + " "), /* @__PURE__ */ React.createElement(Text, { color: C.tool }, e.tool, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))), expanded ? null : e.output && !e.isErr ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " \u2713") : null), expanded ? /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", paddingLeft: 2 }, String(e.output ?? "").split("\n").slice(0, MAX_RESULT).map(
-      (l, i) => /* @__PURE__ */ React.createElement(Text, { key: i, color: e.isErr ? C.error : C.muted }, "\u2502 ", trunc(l, w - nameW - 6))
-    )) : null);
-  }
-  return null;
-}
-function wrap(s, w) {
-  const out = [];
-  for (const para of String(s).split("\n")) {
-    if (!para) {
-      out.push("");
-      continue;
-    }
-    let line = "";
-    for (const word of para.split(" ")) {
-      if (!line) line = word;
-      else if ([...line].length + 1 + [...word].length <= w) line += " " + word;
-      else {
-        out.push(line);
-        line = word;
-      }
-    }
-    out.push(line);
-  }
-  return out.map((l, i) => /* @__PURE__ */ React.createElement(Text, { key: i, color: C.text }, l));
-}
 function App({ initialDir }) {
   const { exit } = useApp();
-  const [entries, setEntries] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [liveTool, setLiveTool] = useState(null);
+  const { stdout } = process;
+  const [activities, setActivities] = useState([]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [busyAgent, setBusyAgent] = useState(null);
+  const [busyTask, setBusyTask] = useState("");
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
   const [tok, setTok] = useState({ p: 0, c: 0 });
   const [tick, setTick] = useState(0);
-  const [expandedIds, setExpandedIds] = useState(/* @__PURE__ */ new Set());
-  const [dialog, setDialog] = useState(null);
-  const [dialogSel, setDialogSel] = useState(0);
   const [focusProj, setFocusProj] = useState(null);
-  const [notice, setNotice] = useState("");
-  const [scrollFromBottom, setScrollFromBottom] = useState(0);
+  const [history, setHistory] = useState([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
   const pendingToolRef = useRef(null);
-  const { stdout } = process;
   useEffect(() => {
     stdout.write("\x1B[?1049h\x1B[H");
-    const t = setInterval(() => setTick((x) => x + 1), 1200);
+    const t = setInterval(() => setTick((x) => x + 1), 3e3);
     return () => {
       clearInterval(t);
       stdout.write("\x1B[?1049l");
     };
   }, []);
-  const notice_ = useCallback((text, isErr) => {
-    setEntries((prev) => [
-      ...prev.slice(-199),
-      { id: nid(), kind: isErr ? "error" : "info", text }
-    ]);
+  const addActivity = useCallback((item) => {
+    setActivities((prev) => [...prev.slice(-99), { ...item, ts: Date.now() }]);
   }, []);
   const handleEngineEvent = useCallback((ev) => {
     switch (ev.type) {
@@ -204,69 +166,62 @@ function App({ initialDir }) {
         setTok((t) => ({ p: t.p + (ev.prompt_tokens || 0), c: t.c + (ev.completion_tokens || 0) }));
         break;
       case "tool":
-        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false, agent: ev.agent };
+        pendingToolRef.current = { tool: ev.tool, args: ev.args, agent: ev.agent };
         break;
-      case "result":
-        if (pendingToolRef.current) {
-          const t = pendingToolRef.current;
-          t.output = ev.output;
-          t.hasResult = true;
-          t.ok = ev.ok === true || ev.status === "success";
-          t.isErr = !t.ok;
-          setEntries((prev) => [...prev.slice(-199), t]);
+      case "result": {
+        const pt = pendingToolRef.current;
+        if (pt) {
+          addActivity({ type: "tool", tool: pt.tool, agent: pt.agent, ok: ev.ok === true || ev.status === "success", summary: trunc(String(ev.output || "").split("\n")[0], 50) });
           pendingToolRef.current = null;
         }
         break;
+      }
       case "run-done": {
-        if (pendingToolRef.current) {
-          const t = pendingToolRef.current;
-          t.output = "(\u4E2D\u65AD)";
-          t.hasResult = true;
-          t.ok = false;
-          setEntries((prev) => [...prev.slice(-199), t]);
+        const pt = pendingToolRef.current;
+        if (pt) {
+          addActivity({ type: "tool", tool: pt.tool, agent: pt.agent, ok: false, summary: "(\u4E2D\u65AD)" });
           pendingToolRef.current = null;
         }
         const tk = ev.tokens || {};
-        const body = trimLines((ev.output || ev.summary || "").trim() || "(\u65E0\u8F93\u51FA)", 10);
+        const body = (ev.output || ev.summary || "").trim() || "(\u65E0\u8F93\u51FA)";
+        addActivity({ type: "assistant", agent: ev.agent, text: trunc(body.split("\n")[0], 80) });
         setModel(ev.model || model);
-        setEntries((prev) => [...prev.slice(-199), {
-          id: nid(),
-          kind: "assistant",
-          text: body,
-          agent: ev.agent,
-          model: ev.model,
-          ptok: tk.prompt || 0,
-          ctok: tk.completion || 0
-        }]);
         setTok((t) => ({ p: t.p + (tk.prompt || 0), c: t.c + (tk.completion || 0) }));
         setBusy(false);
+        setBusyAgent(null);
+        setBusyTask("");
         break;
       }
       case "llm-error":
-        setEntries((prev) => [
-          ...prev.slice(-199),
-          { id: nid(), kind: "error", text: "\u6A21\u578B\u9519\u8BEF: " + ev.error }
-        ]);
+        addActivity({ type: "system", text: "\u6A21\u578B\u9519\u8BEF: " + ev.error });
         setBusy(false);
+        setBusyAgent(null);
         break;
     }
-  }, [model]);
-  const submitTask = useCallback((task, forceAgent) => {
+  }, [model, addActivity]);
+  const runTask = useCallback((task, forceAgent) => {
     let dir = initialDir;
     if (focusProj) {
       const d = path.join(PROJECTS, focusProj);
       if (fs.existsSync(d)) dir = d;
     } else {
       const st2 = companyState();
-      for (const p of st2.pool) if (task.toLowerCase().includes(p.id.toLowerCase())) {
-        const d = path.join(PROJECTS, p.id);
-        if (fs.existsSync(d)) dir = d;
-        break;
+      for (const p of st2.pool) {
+        if (task.toLowerCase().includes(p.id.toLowerCase())) {
+          const d = path.join(PROJECTS, p.id);
+          if (fs.existsSync(d)) {
+            dir = d;
+            break;
+          }
+        }
       }
     }
-    const agentID = forceAgent || route(task);
+    const agentID = forceAgent || routeTask(task);
+    const agent = getRoster(agentID);
     setBusy(true);
-    setEntries((prev) => [...prev.slice(-199), { id: nid(), kind: "user", text: task }]);
+    setBusyAgent(agentID);
+    setBusyTask(trunc(task, 40));
+    addActivity({ type: "system", text: `CEO \u6307\u6D3E ${agent.name}: ${trunc(task, 50)}` });
     const child = spawn(
       "opc-agent",
       ["run", task, "--dir", dir, "--agent", agentID, "--json"],
@@ -291,31 +246,25 @@ function App({ initialDir }) {
     });
     child.on("error", (e) => {
       setBusy(false);
-      notice_("\u542F\u52A8\u5931\u8D25: " + e.message, true);
+      setBusyAgent(null);
+      addActivity({ type: "system", text: "\u542F\u52A8\u5931\u8D25: " + e.message });
     });
     child.on("close", () => {
       if (pendingToolRef.current) {
-        const t = pendingToolRef.current;
-        t.output = "(\u4E2D\u65AD)";
-        t.hasResult = true;
-        t.ok = false;
-        setEntries((prev) => [...prev.slice(-199), t]);
         pendingToolRef.current = null;
       }
       setBusy(false);
+      setBusyAgent(null);
     });
-  }, [initialDir, focusProj, handleEngineEvent]);
-  function bootstrapNew(name, requirement) {
+  }, [initialDir, focusProj, handleEngineEvent, addActivity]);
+  const createProject = useCallback((name, requirement) => {
     name = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
     const dir = path.join(PROJECTS, name);
     fs.mkdirSync(dir, { recursive: true });
-    notice_(`\u{1F3D7} \u300C${name}\u300D\u5F00\u5DE5\uFF08\u5F00\u53D1\u2192\u6D4B\u8BD5\u2192\u5B89\u5168\u2192\u6587\u6863\u2192\u53D1\u5E03\uFF09\uFF0C\u5B8C\u6210\u540E\u81EA\u52A8\u5165\u6C60`);
+    addActivity({ type: "system", text: `\u65B0\u9879\u76EE\u300C${name}\u300D\u5F00\u5DE5` });
     setBusy(true);
-    setEntries((prev) => [...prev.slice(-199), {
-      id: nid(),
-      kind: "info",
-      text: `\u65B0\u9879\u76EE ${name} \u5168\u6D41\u6C34\u7EBF\u5EFA\u8BBE\u4E2D\u2026`
-    }]);
+    setBusyAgent("build");
+    setBusyTask(`\u5EFA\u8BBE ${name}`);
     const child = spawn(
       "opc-agent",
       [
@@ -348,131 +297,175 @@ function App({ initialDir }) {
     });
     child.on("close", (code) => {
       setBusy(false);
+      setBusyAgent(null);
       if (code === 0 && fs.existsSync(path.join(dir, "README.md"))) {
         const pf = path.join(COMPANY, "pool.json");
         const pool = readJSON(pf, []);
         if (!pool.some((p) => p.id === name))
           pool.push({ id: name, status: "active", interval_min: 60, priority: 5, last_run: 0, fail_streak: 0 });
         fs.writeFileSync(pf, JSON.stringify(pool, null, 1));
-        notice_(`\u{1F389} \u300C${name}\u300D\u5165\u6C60\u6C38\u52A8\uFF01`);
-      } else notice_(`\u300C${name}\u300D\u672A\u5B8C\u6210(code=${code})`, true);
+        addActivity({ type: "system", text: `\u{1F389} \u300C${name}\u300D\u5165\u6C60\u6C38\u52A8\uFF01` });
+      } else {
+        addActivity({ type: "system", text: `\u300C${name}\u300D\u672A\u5B8C\u6210 (code=${code})` });
+      }
     });
-  }
-  function runSlash(t) {
-    const [cmd, ...rest] = t.split(" ");
-    const arg = rest.join(" ");
-    switch (cmd) {
-      case "/help":
-        notice_("\u8F93\u5165\u4EFB\u52A1\u6D3E\u6D3B \xB7 p\u805A\u7126\u9879\u76EE \xB7 a\u6D3E\u7ED9\u5458\u5DE5 \xB7 b\u8D26\u5355 \xB7 h\u5386\u53F2 \xB7 /new \u5EFA\u9879 \xB7 x \u5C55\u5F00\u6700\u8FD1\u5DE5\u5177\u8F93\u51FA");
-        break;
-      case "/clear":
-        setEntries([]);
-        break;
-      case "/exit":
-        exit();
-        break;
-      case "/new": {
-        const sp = arg.indexOf(" ");
-        if (sp < 1) notice_("\u7528\u6CD5: /new <name> <\u9700\u6C42>", true);
-        else bootstrapNew(arg.slice(0, sp), arg.slice(sp + 1));
+  }, [addActivity, handleEngineEvent]);
+  const handleCommand = useCallback((input2) => {
+    const parsed = parseCommand(input2);
+    if (parsed.type === "error") {
+      addActivity({ type: "system", text: parsed.text });
+      return;
+    }
+    if (parsed.type === "task") {
+      runTask(parsed.text);
+      return;
+    }
+    switch (parsed.cmd) {
+      case "/help": {
+        const lines = Object.entries(COMMANDS).map(([cmd, info]) => `  ${cmd.padEnd(12)} ${info.desc}`);
+        addActivity({ type: "system", text: "\u53EF\u7528\u547D\u4EE4:\n" + lines.join("\n") });
         break;
       }
-      case "/focus": {
-        if (!arg) {
-          setFocusProj(null);
-          notice_("\u5DF2\u53D6\u6D88\u805A\u7126");
+      case "/list": {
+        const lines = ROSTER.map((a) => `  ${a.emoji} ${a.name.padEnd(8)} ${a.role}`);
+        addActivity({ type: "system", text: "\u5458\u5DE5\u5217\u8868:\n" + lines.join("\n") });
+        break;
+      }
+      case "/say": {
+        const sp = parsed.args.indexOf(" ");
+        if (sp < 1) {
+          addActivity({ type: "system", text: "\u7528\u6CD5: /say <\u5458\u5DE5\u540D> <\u6D88\u606F>" });
           break;
         }
-        const d = path.join(PROJECTS, arg);
-        if (fs.existsSync(d)) {
-          setFocusProj(arg);
-          notice_("\u805A\u7126: " + arg);
-        } else notice_("\u9879\u76EE\u4E0D\u5B58\u5728: " + arg, true);
+        const agentName = parsed.args.slice(0, sp);
+        const msg = parsed.args.slice(sp + 1);
+        const agent = ROSTER.find((a) => a.name === agentName || a.id === agentName);
+        if (!agent) {
+          addActivity({ type: "system", text: `\u627E\u4E0D\u5230\u5458\u5DE5: ${agentName}` });
+          break;
+        }
+        runTask(msg, agent.id);
         break;
       }
-      default:
-        notice_("\u672A\u77E5\u547D\u4EE4 " + cmd + " \xB7 /help");
+      case "/project": {
+        const [sub, ...rest] = parsed.args.split(/\s+/);
+        if (sub === "list" || !sub) {
+          const st2 = companyState();
+          if (!st2.pool.length) {
+            addActivity({ type: "system", text: "\u9879\u76EE\u6C60\u4E3A\u7A7A" });
+            break;
+          }
+          const lines = st2.pool.map((p) => `  ${p.status === "active" ? "\u{1F7E2}" : "\u23F8"} ${p.id}`);
+          addActivity({ type: "system", text: "\u9879\u76EE\u6C60:\n" + lines.join("\n") });
+        } else if (sub === "focus") {
+          const name = rest[0];
+          if (!name) {
+            setFocusProj(null);
+            addActivity({ type: "system", text: "\u5DF2\u53D6\u6D88\u805A\u7126" });
+            break;
+          }
+          const d = path.join(PROJECTS, name);
+          if (fs.existsSync(d)) {
+            setFocusProj(name);
+            addActivity({ type: "system", text: `\u805A\u7126: ${name}` });
+          } else {
+            addActivity({ type: "system", text: `\u9879\u76EE\u4E0D\u5B58\u5728: ${name}` });
+          }
+        }
+        break;
+      }
+      case "/new": {
+        const sp = parsed.args.indexOf(" ");
+        if (sp < 1) {
+          addActivity({ type: "system", text: "\u7528\u6CD5: /new <name> <\u9700\u6C42>" });
+          break;
+        }
+        createProject(parsed.args.slice(0, sp), parsed.args.slice(sp + 1));
+        break;
+      }
+      case "/bill": {
+        addActivity({ type: "system", text: `\u{1F4B0} \u7D2F\u8BA1 tokens: \u2191${tok.p} \u2193${tok.c}` });
+        break;
+      }
+      case "/history": {
+        const st2 = companyState();
+        const lines = st2.pool.map((p) => {
+          const lastRun = p.last_run ? new Date(p.last_run).toLocaleString("zh-CN") : "\u4ECE\u672A";
+          return `  ${p.id.padEnd(20)} \u6700\u540E\u8FD0\u884C: ${lastRun}`;
+        });
+        addActivity({ type: "system", text: "\u9879\u76EE\u5386\u53F2:\n" + lines.join("\n") });
+        break;
+      }
+      case "/clear": {
+        setActivities([]);
+        break;
+      }
+      case "/status": {
+        const st2 = companyState();
+        addActivity({ type: "system", text: `\u5F15\u64CE: ${st2.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62"} | \u6D3B\u8DC3\u9879\u76EE: ${st2.active.length}/${st2.pool.length} | \u5458\u5DE5: ${ROSTER.length}` });
+        break;
+      }
+      case "/exit": {
+        exit();
+        break;
+      }
     }
-  }
+  }, [addActivity, runTask, createProject, tok, exit]);
   const S = useRef({});
-  S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
+  S.current = { input, busy, history, historyIdx };
   const handlerRef = useRef(null);
   handlerRef.current = (ch, key) => {
     const s = S.current;
-    if (key.ctrl && (ch === "c" || ch === "C")) return;
-    if (s.dialog) {
-      const list = dialogItems(s.dialog);
-      if (key.upArrow) setDialogSel((v) => Math.max(0, v - 1));
-      if (key.downArrow) setDialogSel((v) => Math.min(list.length - 1, v + 1));
-      if (key.escape) setDialog(null);
-      if (key.return) {
-        list[S.current.dialogSel]?.onPick?.();
-        setDialog(null);
-        setDialogSel(0);
-      }
-      return;
-    }
-    if (key.ctrl) {
-      if (ch === "p" && !s.busy) {
-        setDialog("proj");
-        setDialogSel(0);
-        return;
-      }
-      if (ch === "a" && !s.busy) {
-        setDialog("agent");
-        setDialogSel(0);
-        return;
-      }
-      if (ch === "b") {
-        setDialog("bill");
-        setDialogSel(0);
-        return;
-      }
-      if (ch === "h") {
-        runSlash("/history");
-        return;
-      }
-      if (ch === "x") {
-        setExpandedIds((prev) => {
-          const ns = new Set(prev);
-          const toolIds = s.entries.filter((e) => e.kind === "tool").map((e) => e.id);
-          const last = toolIds[toolIds.length - 1];
-          if (last) {
-            if (ns.has(last)) ns.delete(last);
-            else ns.add(last);
-          }
-          return ns;
-        });
-        return;
-      }
-      return;
-    }
-    if (key.pageUp) {
-      setScrollFromBottom((v) => v + 10);
-      return;
-    }
-    if (key.pageDown) {
-      setScrollFromBottom((v) => Math.max(0, v - 10));
+    if (key.ctrl && (ch === "c" || ch === "C")) {
+      exit();
       return;
     }
     if (key.return) {
       const t = s.input.trim();
       setInput("");
+      setHistoryIdx(-1);
       if (!t) return;
-      if (t.startsWith("/")) {
-        runSlash(t);
-        return;
-      }
-      submitTask(t);
+      setHistory((prev) => [...prev.slice(-49), t]);
+      handleCommand(t);
       return;
     }
     if (key.escape) {
       setInput("");
-      setNotice("");
+      setHistoryIdx(-1);
       return;
     }
-    if (key.backspace || key.delete) {
+    if (key.backspace) {
       setInput((i) => i.slice(0, -1));
+      return;
+    }
+    if (key.upArrow) {
+      if (s.history.length === 0) return;
+      const newIdx = s.historyIdx < 0 ? s.history.length - 1 : Math.max(0, s.historyIdx - 1);
+      setHistoryIdx(newIdx);
+      setInput(s.history[newIdx] || "");
+      return;
+    }
+    if (key.downArrow) {
+      if (s.historyIdx < 0) return;
+      const newIdx = s.historyIdx + 1;
+      if (newIdx >= s.history.length) {
+        setHistoryIdx(-1);
+        setInput("");
+      } else {
+        setHistoryIdx(newIdx);
+        setInput(s.history[newIdx] || "");
+      }
+      return;
+    }
+    if (key.tab) {
+      const t = s.input.trim();
+      if (t.startsWith("/")) {
+        const matches = Object.keys(COMMANDS).filter((c) => c.startsWith(t));
+        if (matches.length === 1) setInput(matches[0] + " ");
+        else if (matches.length > 1) {
+          addActivity({ type: "system", text: "\u8865\u5168: " + matches.join("  ") });
+        }
+      }
       return;
     }
     if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
@@ -483,59 +476,75 @@ function App({ initialDir }) {
     handlerRef.current(ch, key);
   }, []);
   useInput(stableInput);
-  function dialogItems(type) {
-    if (type === "proj") {
-      const st2 = companyState();
-      const items = st2.pool.map((p) => ({
-        label: `${p.status === "active" ? "\u{1F7E2}" : "\u23F8"} ${p.id}`,
-        onPick: () => {
-          setFocusProj(p.id);
-          notice_("\u805A\u7126: " + p.id);
-        }
-      }));
-      items.push({ label: "\u{1F310} \u53D6\u6D88\u805A\u7126", onPick: () => {
-        setFocusProj(null);
-        notice_("\u5DF2\u53D6\u6D88");
-      } });
-      return items;
-    }
-    if (type === "agent") {
-      return AGENTS.map(([id, name, desc]) => ({
-        label: `${name.padEnd(10)} ${desc}`,
-        onPick: () => submitTask(`\u5411${name}\u62A5\u5230\u5E76\u7B80\u8FF0\u804C\u8D23`, id)
-      }));
-    }
-    return [];
-  }
   const st = companyState();
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  const SIDEBAR_W = 30;
-  const MAIN_W = W - SIDEBAR_W;
-  const CHAT_H = Math.max(6, H - 7);
   const breath = tick % 2 === 0 ? "\u25CF" : "\u25CB";
   const engColor = busy ? C.warn : st.running ? C.success : C.muted;
-  const rendered = [];
-  const visEntries = entries.slice(-(CHAT_H + 20));
-  for (const e of visEntries) {
-    const expanded = expandedIds.has(e.id);
-    const node = EntryView({ e, w: MAIN_W - 2, expanded });
-    rendered.push(/* @__PURE__ */ React.createElement(Box, { key: e.id }, node));
-  }
-  const from = Math.max(0, rendered.length - CHAT_H - scrollFromBottom);
-  const visible = rendered.slice(from, from + CHAT_H);
+  const engText = busy ? "\u5DE5\u4F5C\u4E2D" : st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62";
+  const HEADER_H = 3;
+  const INPUT_H = 3;
+  const ACTIVITY_H = Math.max(4, H - HEADER_H - INPUT_H - 12);
+  const OFFICE_H = H - HEADER_H - ACTIVITY_H - INPUT_H - 1;
+  const employeeStatus = ROSTER.map((a) => {
+    if (busy && busyAgent === a.id) return { ...a, status: "working", task: busyTask, progress: void 0 };
+    return { ...a, status: "idle", task: null };
+  });
+  const recentActivities = activities.slice(-ACTIVITY_H);
   return /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: W, height: H }, /* @__PURE__ */ React.createElement(
     Box,
     {
-      borderStyle: { topLeft: "\u256D", top: "\u2500", topRight: "\u256E", left: "\u2502", right: "\u2502", bottomLeft: "\u2570", bottom: "\u2500", bottomRight: "\u256F" },
+      borderStyle: { topLeft: "\u2554", top: "\u2550", topRight: "\u2557", left: "\u2551", right: "\u2551", bottomLeft: "\u255A", bottom: "\u2550", bottomRight: "\u255D" },
       borderColor: C.border,
-      width: W
+      width: W,
+      height: HEADER_H,
+      flexDirection: "column",
+      paddingX: 1
     },
-    /* @__PURE__ */ React.createElement(Text, null, " ", /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u232C OPC"), /* @__PURE__ */ React.createElement(Text, { color: engColor }, " [", breath, " \u5F15\u64CE:", busy ? "\u5DE5\u4F5C\u4E2D" : st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62", "]"), /* @__PURE__ */ React.createElement(Text, { color: C.text }, " [\u6C60 ", st.active.length, "/", st.pool.length, "]"), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " [\u5458\u5DE5 ", AGENTS.length, "]"), /* @__PURE__ */ React.createElement(Text, { color: C.warn }, " [\u2191", tok.p, " \u2193", tok.c, "]"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", trunc(model, 24)), focusProj ? /* @__PURE__ */ React.createElement(Text, { color: C.warn }, " [\u{1F3AF}", focusProj, "]") : null)
-  ), /* @__PURE__ */ React.createElement(Box, { flexDirection: "row", height: CHAT_H }, /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: MAIN_W, paddingX: 1 }, visible, busy ? /* @__PURE__ */ React.createElement(Text, { color: C.warn, paddingLeft: namePad() }, "  \u27F3 \u7F16\u6392\u4E2D\u2026") : null, scrollFromBottom > 0 ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  \u2195 \u4E0A\u7FFB ", scrollFromBottom, " \u884C (PgDn \u56DE\u5E95)") : null), /* @__PURE__ */ React.createElement(Box, { width: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.border }, "\u2502".repeat(Math.max(1, CHAT_H)))), /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: SIDEBAR_W - 1, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F4E6} \u9879\u76EE\u6C60"), st.pool.map((p) => /* @__PURE__ */ React.createElement(Text, { key: p.id, color: p.status === "active" ? C.success : C.muted }, " ", p.status === "active" ? "\u{1F7E2}" : "\u23F8", " ", trunc(p.id, SIDEBAR_W - 10))), !st.pool.length ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  (\u7A7A)") : null, /* @__PURE__ */ React.createElement(Text, null, " "), /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F465} \u5458\u5DE5"), AGENTS.slice(0, Math.max(0, CHAT_H - 8 - st.pool.length * 1)).map(([id, name]) => /* @__PURE__ */ React.createElement(Text, { key: id, color: C.muted }, "  ", trunc(name, SIDEBAR_W - 8))), /* @__PURE__ */ React.createElement(Box, { marginTop: 1 }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u{1F4B0} \u2191", tok.p, " \u2193", tok.c)), notice ? /* @__PURE__ */ React.createElement(Text, { color: C.warn }, trunc(notice, SIDEBAR_W - 2)) : null)), /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1, width: W }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), !busy ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_") : /* @__PURE__ */ React.createElement(Text, { color: C.warn }, "\u27F3")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " Enter\u53D1\u9001 \xB7 Ctrl+X\u5C55\u5F00 \xB7 Ctrl+P\u9879\u76EE \xB7 Ctrl+A\u5458\u5DE5 \xB7 Ctrl+B\u8D26\u5355 \xB7 Ctrl+H\u5386\u53F2 \xB7 Esc\u6E05\u7A7A \xB7 Ctrl+C\u9000\u51FA"), dialog ? /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", borderStyle: "double", borderColor: C.primary, paddingX: 1, width: W }, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, dialog === "proj" ? "\u{1F4E6} \u9009\u62E9\u9879\u76EE" : dialog === "agent" ? "\u{1F464} \u5458\u5DE5\u5217\u8868" : dialog === "bill" ? "\u{1F4B0} \u8D26\u5355" : "\u2500\u2500"), /* @__PURE__ */ React.createElement(Text, null, " "), dialogItems(dialog).map((item, i) => /* @__PURE__ */ React.createElement(Text, { key: i, color: i === dialogSel ? C.primary : C.text, bold: i === dialogSel }, i === dialogSel ? "\u25B8 " : "  ", item.label)), /* @__PURE__ */ React.createElement(Text, null, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u2191\u2193\u9009\u62E9 \xB7 Enter\u786E\u8BA4 \xB7 Esc\u5173\u95ED")) : null);
-}
-function namePad() {
-  return 4;
+    /* @__PURE__ */ React.createElement(Box, null, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.accent }, "\u{1F3E2} OPC \u6C38\u52A8\u516C\u53F8"), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { color: engColor }, breath, " \u5F15\u64CE: ", engText), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, "\u{1F4CA} ", st.active.length, "/", st.pool.length, " \u9879\u76EE"), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, "\u{1F465} ", ROSTER.length, " \u5458\u5DE5"), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { color: C.warn }, "\u{1F4B0} \u2191", tok.p, " \u2193", tok.c), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, trunc(model, 24)), focusProj ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " \u2502 "), /* @__PURE__ */ React.createElement(Text, { color: C.warn }, "\u{1F3AF} ", focusProj)) : null)
+  ), /* @__PURE__ */ React.createElement(Box, { flexDirection: "row", height: OFFICE_H + ACTIVITY_H }, /* @__PURE__ */ React.createElement(
+    Box,
+    {
+      flexDirection: "column",
+      width: Math.floor(W * 0.45),
+      height: OFFICE_H + ACTIVITY_H,
+      paddingX: 1
+    },
+    /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.accent }, "\u250C\u2500 \u529E\u516C\u5BA4 \u2500\u2510"),
+    /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", marginTop: 0 }, employeeStatus.map((a) => /* @__PURE__ */ React.createElement(
+      EmployeeDesk,
+      {
+        key: a.id,
+        agent: a,
+        status: a.status,
+        task: a.task,
+        progress: a.progress,
+        width: Math.floor(W * 0.45) - 2
+      }
+    )))
+  ), /* @__PURE__ */ React.createElement(Box, { width: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.border }, "\u2502".repeat(OFFICE_H + ACTIVITY_H))), /* @__PURE__ */ React.createElement(
+    Box,
+    {
+      flexDirection: "column",
+      width: W - Math.floor(W * 0.45) - 1,
+      height: OFFICE_H + ACTIVITY_H,
+      paddingX: 1
+    },
+    /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.accent }, "\u250C\u2500 \u5B9E\u65F6\u52A8\u6001 \u2500\u2510"),
+    /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", marginTop: 0 }, recentActivities.length === 0 ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  \u6682\u65E0\u6D3B\u52A8\uFF0C\u7B49\u5F85 CEO \u6307\u4EE4\u2026") : recentActivities.map((item, i) => /* @__PURE__ */ React.createElement(ActivityItem, { key: i, item, width: W - Math.floor(W * 0.45) - 4 })))
+  )), /* @__PURE__ */ React.createElement(
+    Box,
+    {
+      borderStyle: { topLeft: "\u250C", top: "\u2500", topRight: "\u2510", left: "\u2502", right: "\u2502", bottomLeft: "\u2514", bottom: "\u2500", bottomRight: "\u2518" },
+      borderColor: busy ? C.warn : C.border,
+      width: W,
+      height: INPUT_H,
+      flexDirection: "column",
+      paddingX: 1
+    },
+    /* @__PURE__ */ React.createElement(Box, null, /* @__PURE__ */ React.createElement(Text, { color: C.ceo, bold: true }, "\u{1F451} CEO "), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, "> "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), !busy ? /* @__PURE__ */ React.createElement(Text, { color: C.accent }, "\u258C") : /* @__PURE__ */ React.createElement(Text, { color: C.warn }, " \u23F3")),
+    /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  \u8F93\u5165\u547D\u4EE4: /help \u67E5\u770B\u5E2E\u52A9 | /say <\u5458\u5DE5> <\u6D88\u606F> | /project list | /new <\u540D\u79F0> <\u9700\u6C42>")
+  ));
 }
 var idx = process.argv.indexOf("--dir");
 var dirArg = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();

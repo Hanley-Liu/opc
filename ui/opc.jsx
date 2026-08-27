@@ -1,87 +1,193 @@
 #!/usr/bin/env node
-// opc — OPC 永动公司驾驶台 v3
-// 设计定稿：双栏布局（左对话 / 右公司侧栏）+ opencode 消息规范（说话人标签+折叠工具）
+// OPC 永动公司 v4 — 虚拟办公室
+// 设计哲学：CEO 走进办公室，看到员工在工作，下达指令
+// 不是聊天，不是仪表盘，是「公司模拟器」
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useApp, useInput } from "ink";
 import { spawn } from "node:child_process";
-import readline from "node:readline";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// ═══════════════════════════════════════════════
+//  常量与工具
+// ═══════════════════════════════════════════════
 const C = {
-  primary: "#7aa2f7", secondary: "#bb9af7", text: "#c0caf5", muted: "#565f89",
-  error: "#f7768e", success: "#9ece6a", warn: "#e0af68", tool: "#7dcfff",
-  border: "#3d445c", hiBg: "#292e42", panel: "#16161e",
+  // 办公室色调（Tokyo Night）
+  floor: "#1a1b26",      // 地板/背景
+  wall: "#24283b",       // 墙壁/面板
+  desk: "#414868",       // 桌子/分隔线
+  text: "#c0caf5",       // 正文
+  muted: "#565f89",      // 灰色文字
+  accent: "#7aa2f7",     // 强调色（蓝色）
+  success: "#9ece6a",    // 在线/完成（绿色）
+  warn: "#e0af68",       // 工作中（黄色）
+  error: "#f7768e",      // 错误/离线（红色）
+  tool: "#7dcfff",       // 工具调用（青色）
+  ceo: "#bb9af7",        // CEO（紫色）
+  border: "#3d445c",     // 边框
 };
+
 const COMPANY = path.join(os.homedir(), ".local/share/opencode/company");
 const PROJECTS = path.join(os.homedir(), ".local/share/opencode/projects");
-const MAX_RESULT = 8;
+
+const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
+const trunc = (s, w) => {
+  s = String(s ?? "").replace(/\n/g, " ");
+  const r = [...s];
+  return r.length <= w ? s : r.slice(0, Math.max(1, w - 1)).join("") + "…";
+};
+const padR = (s, w) => { s = String(s ?? ""); return s + " ".repeat(Math.max(0, w - [...s].length)); };
+const padL = (s, w) => { s = String(s ?? ""); return " ".repeat(Math.max(0, w - [...s].length)) + s; };
 
 let idc = 0;
 const nid = () => `e${++idc}`;
-const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
-const trunc = (s, w) => { s = String(s ?? "").replace(/\n/g, " "); const r = [...s]; return r.length <= w ? s : r.slice(0, Math.max(1, w - 1)).join("") + "…"; };
 
-const AGENTS = [
-  ["build", "Sisyphus", "COO·编排"],
-  ["product-manager", "产品经理", "需求PRD"],
-  ["architect", "架构师", "系统设计"],
-  ["developer", "开发者", "编码实现"],
-  ["tester", "测试员", "质量保证"],
-  ["security-auditor", "安全审计", "漏洞扫描"],
-  ["docs-writer", "文档", "README"],
-  ["marketing-growth", "增长营销", "涨星推广"],
-  ["github-agent", "发布官", "git推送"],
-  ["devops-release", "发布工程", "版本CI"],
-  ["analyst", "分析师", "数据洞察"],
-  ["legal-compliance", "法务", "合规"],
+// ═══════════════════════════════════════════════
+//  员工花名册
+// ═══════════════════════════════════════════════
+const ROSTER = [
+  { id: "build",            name: "Sisyphus",  role: "COO·编排",  emoji: "🧭", color: "#bb9af7" },
+  { id: "product-manager",  name: "产品经理",   role: "需求PRD",   emoji: "📋", color: "#9ece6a" },
+  { id: "architect",        name: "架构师",     role: "系统设计",   emoji: "🏗",  color: "#7dcfff" },
+  { id: "developer",        name: "开发者",     role: "编码实现",   emoji: "💻", color: "#e0af68" },
+  { id: "tester",           name: "测试员",     role: "质量保证",   emoji: "🔍", color: "#ff9e64" },
+  { id: "security-auditor", name: "安全审计",   role: "漏洞扫描",   emoji: "🛡",  color: "#f7768e" },
+  { id: "docs-writer",      name: "文档工程师", role: "README",    emoji: "📝", color: "#73daca" },
+  { id: "marketing-growth", name: "增长营销",   role: "涨星推广",   emoji: "📢", color: "#ff007f" },
+  { id: "github-agent",     name: "发布官",     role: "git推送",   emoji: "🚀", color: "#c0caf5" },
+  { id: "devops-release",   name: "发布工程",   role: "版本CI",    emoji: "⚙️", color: "#2ac3de" },
+  { id: "analyst",          name: "分析师",     role: "数据洞察",   emoji: "📊", color: "#b4f9f8" },
+  { id: "legal-compliance", name: "法务",       role: "合规",      emoji: "⚖️", color: "#a9b1d6" },
 ];
 
+function getRoster(id) {
+  return ROSTER.find(r => r.id === id) || { id, name: id || "未知", role: "", emoji: "❓", color: C.muted };
+}
+
+// ═══════════════════════════════════════════════
+//  状态读取
+// ═══════════════════════════════════════════════
 function companyState() {
   const pool = readJSON(path.join(COMPANY, "pool.json"), []);
   const eng = readJSON(path.join(COMPANY, "engine.json"), { running: false });
   return { pool, active: pool.filter(p => p.status === "active"), running: !!eng.running };
 }
 
-function trimLines(s, maxLines) {
-  const lines = String(s).split("\n");
-  if (lines.length <= maxLines) return s;
-  return lines.slice(0, maxLines).join("\n") + "\n… (+" + (lines.length - maxLines) + " 行，全文见审计日志)";
+// ═══════════════════════════════════════════════
+//  进度条
+// ═══════════════════════════════════════════════
+function progressBar(pct, w = 16) {
+  const filled = Math.round((pct / 100) * w);
+  return "█".repeat(filled) + "░".repeat(w - filled);
 }
 
-const ROSTER = {
-  "build":              { name: "Sisyphus",  role: "COO·编排",  color: "#bb9af7" },
-  "product-manager":    { name: "产品经理",   role: "需求PRD",   color: "#9ece6a" },
-  "architect":          { name: "架构师",     role: "系统设计",   color: "#7dcfff" },
-  "developer":          { name: "开发者",     role: "编码实现",   color: "#e0af68" },
-  "tester":             { name: "测试员",     role: "质量保证",   color: "#ff9e64" },
-  "security-auditor":   { name: "安全审计",   role: "漏洞扫描",   color: "#f7768e" },
-  "docs-writer":        { name: "文档工程师", role: "README",    color: "#73daca" },
-  "marketing-growth":   { name: "增长营销",   role: "涨星推广",   color: "#ff007f" },
-  "github-agent":       { name: "发布官",     role: "git推送",    color: "#c0caf5" },
-  "devops-release":     { name: "发布工程",   role: "版本CI",    color: "#2ac3de" },
-  "analyst":            { name: "分析师",     role: "数据洞察",   color: "#b4f9f8" },
-  "legal-compliance":   { name: "法务",      role: "合规",      color: "#a9b1d6" },
+// ═══════════════════════════════════════════════
+//  活动日志组件
+// ═══════════════════════════════════════════════
+function ActivityItem({ item, width }) {
+  const time = new Date(item.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const agent = getRoster(item.agent);
+
+  if (item.type === "system") {
+    return (
+      <Box width={width}>
+        <Text dimColor>{time} </Text>
+        <Text color={C.muted}>{trunc(item.text, width - 8)}</Text>
+      </Box>
+    );
+  }
+
+  if (item.type === "tool") {
+    const mark = item.ok === true ? "✓" : item.ok === false ? "✖" : "⟳";
+    const markColor = item.ok === true ? C.success : item.ok === false ? C.error : C.warn;
+    return (
+      <Box width={width}>
+        <Text dimColor>{time} </Text>
+        <Text color={agent.color}>{trunc(agent.name, 6)} </Text>
+        <Text color={markColor} bold>{mark} </Text>
+        <Text color={C.tool}>{item.tool} </Text>
+        <Text dimColor>{trunc(item.summary || "", width - 30)}</Text>
+      </Box>
+    );
+  }
+
+  if (item.type === "assistant") {
+    return (
+      <Box width={width}>
+        <Text dimColor>{time} </Text>
+        <Text color={agent.color} bold>{agent.emoji} {trunc(agent.name, 6)} </Text>
+        <Text color={C.text}>{trunc(item.text, width - 30)}</Text>
+      </Box>
+    );
+  }
+
+  return null;
+}
+
+// ═══════════════════════════════════════════════
+//  员工工位组件
+// ═══════════════════════════════════════════════
+function EmployeeDesk({ agent, status, task, progress, width }) {
+  const statusEmoji = status === "working" ? "🟢" : status === "waiting" ? "⏸" : status === "done" ? "✅" : "💤";
+  const statusText = status === "working" ? "工作中" : status === "waiting" ? "等待中" : status === "done" ? "已完成" : "空闲";
+  const statusColor = status === "working" ? C.success : status === "waiting" ? C.muted : status === "done" ? C.accent : C.muted;
+
+  return (
+    <Box flexDirection="column" width={width} paddingX={1}>
+      <Box>
+        <Text color={agent.color}>{agent.emoji} </Text>
+        <Text color={agent.color} bold>{padR(agent.name, 8)}</Text>
+        <Text dimColor>{padR(agent.role, 8)}</Text>
+        <Text color={statusColor}>{statusEmoji} {statusText}</Text>
+      </Box>
+      {task ? (
+        <Box paddingLeft={3}>
+          <Text dimColor>└─ </Text>
+          <Text color={C.text}>{trunc(task, width - 16)}</Text>
+          {progress !== undefined ? (
+            <Text color={C.accent}> {progressBar(progress, 8)} {progress}%</Text>
+          ) : null}
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+// ═══════════════════════════════════════════════
+//  命令系统
+// ═══════════════════════════════════════════════
+const COMMANDS = {
+  "/help": { desc: "查看所有命令", usage: "/help" },
+  "/list": { desc: "列出所有员工", usage: "/list" },
+  "/say": { desc: "跟员工说话", usage: "/say <员工名> <消息>" },
+  "/project": { desc: "管理项目", usage: "/project list | /project focus <name>" },
+  "/new": { desc: "创建新项目", usage: "/new <name> <需求>" },
+  "/bill": { desc: "查看账单", usage: "/bill" },
+  "/history": { desc: "查看历史", usage: "/history" },
+  "/clear": { desc: "清空活动流", usage: "/clear" },
+  "/status": { desc: "查看公司状态", usage: "/status" },
+  "/exit": { desc: "退出", usage: "/exit" },
 };
-function rosterOf(agentId) {
-  return ROSTER[agentId] || { name: agentId || "公司", role: "", color: "#7aa2f7" };
+
+function parseCommand(input) {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) return { type: "task", text: trimmed };
+
+  const parts = trimmed.split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const args = parts.slice(1).join(" ");
+
+  if (!COMMANDS[cmd]) return { type: "error", text: `未知命令: ${cmd}，输入 /help 查看帮助` };
+
+  return { type: "command", cmd, args };
 }
 
-function prettyParams(raw) {
-  try {
-    const m = JSON.parse(raw);
-    if (m.command) return "$ " + m.command.replace(/\n/g, " ");
-    if (m.path && m.old_string) return `${m.path} ✎`;
-    if (m.path && m.content) return `${m.path} ✚${String(m.content).length}B`;
-    if (m.path) return m.path;
-    if (m.pattern) return "/" + m.pattern;
-    if (m.agent) return `→ ${m.agent}`;
-  } catch {}
-  return raw;
-}
-
-function route(task) {
+// ═══════════════════════════════════════════════
+//  任务路由
+// ═══════════════════════════════════════════════
+function routeTask(task) {
   const low = task.toLowerCase();
   if (/测试|test/.test(low)) return "tester";
   if (/架构/.test(low)) return "architect";
@@ -94,194 +200,109 @@ function route(task) {
   return "build";
 }
 
-// 极简 markdown：**粗体** / ```代码块``` / 列表保持
-function mdLite(text, w, textColor) {
-  const out = [];
-  let inCode = false;
-  for (let raw of String(text || "").split("\n")) {
-    if (raw.trim().startsWith("```")) { inCode = !inCode; continue; }
-    const bold = (l) => l.replace(/\*\*(.+?)\*\*/g, "\x1b[1m$1\x1b[22m");
-    const styled = bold(raw);
-    if (inCode) out.push(lipglossText("  │ " + trunc(styled, w - 6), C.tool));
-    else out.push(lipglossText(trunc(styled, w - 2), textColor));
-  }
-  return out;
-}
-function lipglossText(text, color) {
-  return <Text color={color}>{text}</Text>;
-}
-
-// ─────────── 条目 ───────────
-// kind: user | assistant | tool(含 result 合并渲染)
-function EntryView({ e, w, expanded }) {
-  const nameW = 4;
-
-  if (e.kind === "user") {
-    return (
-      <Box flexDirection="column" marginBottom={0}>
-        <Text><Text color={C.secondary} bold>{"👑 CEO"}</Text><Text dimColor>{" ──"}</Text></Text>
-        <Box paddingLeft={nameW} flexDirection="column">
-          {wrap(e.text, Math.max(20, w - nameW))}
-        </Box>
-      </Box>
-    );
-  }
-  if (e.kind === "assistant") {
-    const r = rosterOf(e.agent);
-    return (
-      <Box flexDirection="column">
-        <Text>
-          <Text color={r.color} bold>{"▌ " + r.name}</Text>
-          <Text dimColor>{" " + r.role + " ── " + trunc(e.model || "", 20) + " ↑" + (e.ptok||0) + " ↓" + (e.ctok||0) + " tok"}</Text>
-        </Text>
-        <Box paddingLeft={nameW} flexDirection="column">
-          {mdLite(e.text, Math.max(20, w - nameW), C.text)}
-        </Box>
-      </Box>
-    );
-  }
-  if (e.kind === "info") {
-    return <Box paddingLeft={nameW}><Text dimColor>· {e.text}</Text></Box>;
-  }
-  if (e.kind === "error") {
-    return <Box paddingLeft={nameW}><Text color={C.error}>✖ {trunc(e.text, w - 6)}</Text></Box>;
-  }
-  if (e.kind === "tool") {
-    const mark = e.hasResult ? (e.ok ? "✓" : "✖") : "⟳";
-    const markColor = e.hasResult ? (e.ok ? C.success : C.error) : C.warn;
-    const head = `${mark} ⚡ ${e.tool}: ${trunc(prettyParams(e.args), Math.max(16, w - nameW - 14))}`;
-    return (
-      <Box flexDirection="column" paddingLeft={nameW}>
-        <Text>
-          <Text color={C.muted}>{trunc(rosterOf(e.agent).name, 8) + " "}</Text>
-          <Text color={markColor} bold>{mark + " "}</Text>
-          <Text color={C.tool}>{e.tool} </Text>
-          <Text dimColor>{trunc(prettyParams(e.args), Math.max(16, w - nameW - 12))}</Text>
-          {expanded ? null : e.output && !e.isErr ? <Text dimColor>{" ✓"}</Text> : null}
-        </Text>
-        {expanded ? (
-          <Box flexDirection="column" paddingLeft={2}>
-            {(String(e.output ?? "").split("\n").slice(0, MAX_RESULT).map((l, i) =>
-              <Text key={i} color={e.isErr ? C.error : C.muted}>│ {trunc(l, w - nameW - 6)}</Text>
-            ))}
-          </Box>
-        ) : null}
-      </Box>
-    );
-  }
-  return null;
-}
-
-function wrap(s, w) {
-  const out = [];
-  for (const para of String(s).split("\n")) {
-    if (!para) { out.push(""); continue; }
-    let line = "";
-    for (const word of para.split(" ")) {
-      if (!line) line = word;
-      else if ([...line].length + 1 + [...word].length <= w) line += " " + word;
-      else { out.push(line); line = word; }
-    }
-    out.push(line);
-  }
-  return out.map((l, i) => <Text key={i} color={C.text}>{l}</Text>);
-}
-
-// ─────────── App ───────────
+// ═══════════════════════════════════════════════
+//  App
+// ═══════════════════════════════════════════════
 function App({ initialDir }) {
   const { exit } = useApp();
-  const [entries, setEntries] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [liveTool, setLiveTool] = useState(null);   // {tool,args}
+  const { stdout } = process;
+
+  // 状态
+  const [activities, setActivities] = useState([]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [busyAgent, setBusyAgent] = useState(null);
+  const [busyTask, setBusyTask] = useState("");
   const [model, setModel] = useState("zen/laguna-s-2.1-free");
   const [tok, setTok] = useState({ p: 0, c: 0 });
   const [tick, setTick] = useState(0);
-  const [expandedIds, setExpandedIds] = useState(new Set());
-  const [dialog, setDialog] = useState(null);
-  const [dialogSel, setDialogSel] = useState(0);
   const [focusProj, setFocusProj] = useState(null);
-  const [notice, setNotice] = useState("");
-  const [scrollFromBottom, setScrollFromBottom] = useState(0);
+  const [history, setHistory] = useState([]); // 命令历史
+  const [historyIdx, setHistoryIdx] = useState(-1);
   const pendingToolRef = useRef(null);
-  const { stdout } = process;
 
+  // 进入 alt buffer
   useEffect(() => {
     stdout.write("\x1b[?1049h\x1b[H");
-    const t = setInterval(() => setTick(x => x + 1), 1200);
+    const t = setInterval(() => setTick(x => x + 1), 3000); // 3秒刷新
     return () => { clearInterval(t); stdout.write("\x1b[?1049l"); };
   }, []);
 
-  const notice_ = useCallback((text, isErr) => {
-    setEntries(prev => [...prev.slice(-199),
-      { id: nid(), kind: isErr ? "error" : "info", text }]);
+  // 添加活动
+  const addActivity = useCallback((item) => {
+    setActivities(prev => [...prev.slice(-99), { ...item, ts: Date.now() }]);
   }, []);
 
-  // 引擎事件 → 统一条目流（工具与其结果合并为一个条目）
+  // 处理引擎事件
   const handleEngineEvent = useCallback((ev) => {
     switch (ev.type) {
       case "llm":
         setModel(ev.model || model);
-        setTok(t => ({ p: t.p + (ev.prompt_tokens||0), c: t.c + (ev.completion_tokens||0) }));
+        setTok(t => ({ p: t.p + (ev.prompt_tokens || 0), c: t.c + (ev.completion_tokens || 0) }));
         break;
       case "tool":
-        pendingToolRef.current = { id: nid(), kind: "tool", tool: ev.tool, args: ev.args, output: "", hasResult: false, agent: ev.agent };
+        pendingToolRef.current = { tool: ev.tool, args: ev.args, agent: ev.agent };
         break;
-      case "result":
-        if (pendingToolRef.current) {
-          const t = pendingToolRef.current;
-          t.output = ev.output; t.hasResult = true; t.ok = ev.ok === true || ev.status === "success"; t.isErr = !t.ok;
-          setEntries(prev => [...prev.slice(-199), t]);
+      case "result": {
+        const pt = pendingToolRef.current;
+        if (pt) {
+          addActivity({ type: "tool", tool: pt.tool, agent: pt.agent, ok: ev.ok === true || ev.status === "success", summary: trunc(String(ev.output || "").split("\n")[0], 50) });
           pendingToolRef.current = null;
         }
         break;
+      }
       case "run-done": {
-        if (pendingToolRef.current) {
-          const t = pendingToolRef.current;
-          t.output = "(中断)"; t.hasResult = true; t.ok = false;
-          setEntries(prev => [...prev.slice(-199), t]);
+        const pt = pendingToolRef.current;
+        if (pt) {
+          addActivity({ type: "tool", tool: pt.tool, agent: pt.agent, ok: false, summary: "(中断)" });
           pendingToolRef.current = null;
         }
         const tk = ev.tokens || {};
-        const body = trimLines((ev.output || ev.summary || "").trim() || "(无输出)", 10);
+        const body = (ev.output || ev.summary || "").trim() || "(无输出)";
+        addActivity({ type: "assistant", agent: ev.agent, text: trunc(body.split("\n")[0], 80) });
         setModel(ev.model || model);
-        setEntries(prev => [...prev.slice(-199), {
-          id: nid(), kind: "assistant",
-          text: body,
-          agent: ev.agent,
-          model: ev.model, ptok: tk.prompt||0, ctok: tk.completion||0,
-        }]);
-        setTok(t => ({ p: t.p + (tk.prompt||0), c: t.c + (tk.completion||0) }));
+        setTok(t => ({ p: t.p + (tk.prompt || 0), c: t.c + (tk.completion || 0) }));
         setBusy(false);
+        setBusyAgent(null);
+        setBusyTask("");
         break;
       }
       case "llm-error":
-        setEntries(prev => [...prev.slice(-199),
-          { id: nid(), kind: "error", text: "模型错误: " + ev.error }]);
+        addActivity({ type: "system", text: "模型错误: " + ev.error });
         setBusy(false);
+        setBusyAgent(null);
         break;
     }
-  }, [model]);
+  }, [model, addActivity]);
 
-  const submitTask = useCallback((task, forceAgent) => {
+  // 执行任务
+  const runTask = useCallback((task, forceAgent) => {
     let dir = initialDir;
     if (focusProj) {
       const d = path.join(PROJECTS, focusProj);
       if (fs.existsSync(d)) dir = d;
     } else {
       const st = companyState();
-      for (const p of st.pool) if (task.toLowerCase().includes(p.id.toLowerCase())) {
-        const d = path.join(PROJECTS, p.id);
-        if (fs.existsSync(d)) dir = d;
-        break;
+      for (const p of st.pool) {
+        if (task.toLowerCase().includes(p.id.toLowerCase())) {
+          const d = path.join(PROJECTS, p.id);
+          if (fs.existsSync(d)) { dir = d; break; }
+        }
       }
     }
-    const agentID = forceAgent || route(task);
+
+    const agentID = forceAgent || routeTask(task);
+    const agent = getRoster(agentID);
     setBusy(true);
-    setEntries(prev => [...prev.slice(-199), { id: nid(), kind: "user", text: task }]);
+    setBusyAgent(agentID);
+    setBusyTask(trunc(task, 40));
+
+    addActivity({ type: "system", text: `CEO 指派 ${agent.name}: ${trunc(task, 50)}` });
+
     const child = spawn("opc-agent",
       ["run", task, "--dir", dir, "--agent", agentID, "--json"],
       { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir });
+
     let buf = "";
     child.stdout.on("data", d => {
       buf += d.toString();
@@ -293,31 +314,34 @@ function App({ initialDir }) {
         handleEngineEvent(ev);
       }
     });
-    child.on("error", e => { setBusy(false); notice_("启动失败: " + e.message, true); });
+
+    child.on("error", e => { setBusy(false); setBusyAgent(null); addActivity({ type: "system", text: "启动失败: " + e.message }); });
     child.on("close", () => {
       if (pendingToolRef.current) {
-        const t = pendingToolRef.current;
-        t.output = "(中断)"; t.hasResult = true; t.ok = false;
-        setEntries(prev => [...prev.slice(-199), t]);
         pendingToolRef.current = null;
       }
       setBusy(false);
+      setBusyAgent(null);
     });
-  }, [initialDir, focusProj, handleEngineEvent]);
+  }, [initialDir, focusProj, handleEngineEvent, addActivity]);
 
-  function bootstrapNew(name, requirement) {
+  // 创建新项目
+  const createProject = useCallback((name, requirement) => {
     name = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
     const dir = path.join(PROJECTS, name);
     fs.mkdirSync(dir, { recursive: true });
-    notice_(`🏗 「${name}」开工（开发→测试→安全→文档→发布），完成后自动入池`);
+
+    addActivity({ type: "system", text: `新项目「${name}」开工` });
     setBusy(true);
-    setEntries(prev => [...prev.slice(-199), { id: nid(), kind: "info",
-      text: `新项目 ${name} 全流水线建设中…` }]);
+    setBusyAgent("build");
+    setBusyTask(`建设 ${name}`);
+
     const child = spawn("opc-agent",
       ["run",
-       `FULL LIFECYCLE for new project '${name}'. Requirement: ${requirement}. Work in cwd. Phases: product-manager -> architect -> developer -> tester(tests pass) -> security-auditor -> legal(MIT Hanley-Liu) -> docs-writer(README.md+README.zh-CN.md) -> git init & push to github.com/Hanley-Liu/${name} (GITHUB_TOKEN set, insteadOf active) -> devops-release(topics+description). Decide everything yourself.`,
-       "--dir", dir, "--agent", "build", "--json"],
+        `FULL LIFECYCLE for new project '${name}'. Requirement: ${requirement}. Work in cwd. Phases: product-manager -> architect -> developer -> tester(tests pass) -> security-auditor -> legal(MIT Hanley-Liu) -> docs-writer(README.md+README.zh-CN.md) -> git init & push to github.com/Hanley-Liu/${name} (GITHUB_TOKEN set, insteadOf active) -> devops-release(topics+description). Decide everything yourself.`,
+        "--dir", dir, "--agent", "build", "--json"],
       { env: { ...process.env, PATH: `${os.homedir()}/.local/bin:${process.env.PATH}` }, cwd: dir });
+
     let buf = "";
     child.stdout.on("data", d => {
       buf += d.toString();
@@ -329,233 +353,300 @@ function App({ initialDir }) {
         handleEngineEvent(ev);
       }
     });
+
     child.on("close", code => {
       setBusy(false);
+      setBusyAgent(null);
       if (code === 0 && fs.existsSync(path.join(dir, "README.md"))) {
         const pf = path.join(COMPANY, "pool.json");
         const pool = readJSON(pf, []);
         if (!pool.some(p => p.id === name))
           pool.push({ id: name, status: "active", interval_min: 60, priority: 5, last_run: 0, fail_streak: 0 });
         fs.writeFileSync(pf, JSON.stringify(pool, null, 1));
-        notice_(`🎉 「${name}」入池永动！`);
-      } else notice_(`「${name}」未完成(code=${code})`, true);
+        addActivity({ type: "system", text: `🎉 「${name}」入池永动！` });
+      } else {
+        addActivity({ type: "system", text: `「${name}」未完成 (code=${code})` });
+      }
     });
-  }
+  }, [addActivity, handleEngineEvent]);
 
-  function runSlash(t) {
-    const [cmd, ...rest] = t.split(" ");
-    const arg = rest.join(" ");
-    switch (cmd) {
-      case "/help": notice_("输入任务派活 · p聚焦项目 · a派给员工 · b账单 · h历史 · /new 建项 · x 展开最近工具输出"); break;
-      case "/clear": setEntries([]); break;
-      case "/exit": exit(); break;
-      case "/new": {
-        const sp = arg.indexOf(" ");
-        if (sp < 1) notice_("用法: /new <name> <需求>", true);
-        else bootstrapNew(arg.slice(0, sp), arg.slice(sp + 1));
-        break;
-      }
-      case "/focus": {
-        if (!arg) { setFocusProj(null); notice_("已取消聚焦"); break; }
-        const d = path.join(PROJECTS, arg);
-        if (fs.existsSync(d)) { setFocusProj(arg); notice_("聚焦: " + arg); }
-        else notice_("项目不存在: " + arg, true);
-        break;
-      }
-      default: notice_("未知命令 " + cmd + " · /help");
+  // 处理命令
+  const handleCommand = useCallback((input) => {
+    const parsed = parseCommand(input);
+
+    if (parsed.type === "error") {
+      addActivity({ type: "system", text: parsed.text });
+      return;
     }
-  }
 
-  // ─── 键盘监听（稳定引用，避免竞态丢键）───
+    if (parsed.type === "task") {
+      runTask(parsed.text);
+      return;
+    }
+
+    // 命令处理
+    switch (parsed.cmd) {
+      case "/help": {
+        const lines = Object.entries(COMMANDS).map(([cmd, info]) => `  ${cmd.padEnd(12)} ${info.desc}`);
+        addActivity({ type: "system", text: "可用命令:\n" + lines.join("\n") });
+        break;
+      }
+      case "/list": {
+        const lines = ROSTER.map(a => `  ${a.emoji} ${a.name.padEnd(8)} ${a.role}`);
+        addActivity({ type: "system", text: "员工列表:\n" + lines.join("\n") });
+        break;
+      }
+      case "/say": {
+        const sp = parsed.args.indexOf(" ");
+        if (sp < 1) { addActivity({ type: "system", text: "用法: /say <员工名> <消息>" }); break; }
+        const agentName = parsed.args.slice(0, sp);
+        const msg = parsed.args.slice(sp + 1);
+        const agent = ROSTER.find(a => a.name === agentName || a.id === agentName);
+        if (!agent) { addActivity({ type: "system", text: `找不到员工: ${agentName}` }); break; }
+        runTask(msg, agent.id);
+        break;
+      }
+      case "/project": {
+        const [sub, ...rest] = parsed.args.split(/\s+/);
+        if (sub === "list" || !sub) {
+          const st = companyState();
+          if (!st.pool.length) { addActivity({ type: "system", text: "项目池为空" }); break; }
+          const lines = st.pool.map(p => `  ${p.status === "active" ? "🟢" : "⏸"} ${p.id}`);
+          addActivity({ type: "system", text: "项目池:\n" + lines.join("\n") });
+        } else if (sub === "focus") {
+          const name = rest[0];
+          if (!name) { setFocusProj(null); addActivity({ type: "system", text: "已取消聚焦" }); break; }
+          const d = path.join(PROJECTS, name);
+          if (fs.existsSync(d)) { setFocusProj(name); addActivity({ type: "system", text: `聚焦: ${name}` }); }
+          else { addActivity({ type: "system", text: `项目不存在: ${name}` }); }
+        }
+        break;
+      }
+      case "/new": {
+        const sp = parsed.args.indexOf(" ");
+        if (sp < 1) { addActivity({ type: "system", text: "用法: /new <name> <需求>" }); break; }
+        createProject(parsed.args.slice(0, sp), parsed.args.slice(sp + 1));
+        break;
+      }
+      case "/bill": {
+        addActivity({ type: "system", text: `💰 累计 tokens: ↑${tok.p} ↓${tok.c}` });
+        break;
+      }
+      case "/history": {
+        const st = companyState();
+        const lines = st.pool.map(p => {
+          const lastRun = p.last_run ? new Date(p.last_run).toLocaleString("zh-CN") : "从未";
+          return `  ${p.id.padEnd(20)} 最后运行: ${lastRun}`;
+        });
+        addActivity({ type: "system", text: "项目历史:\n" + lines.join("\n") });
+        break;
+      }
+      case "/clear": {
+        setActivities([]);
+        break;
+      }
+      case "/status": {
+        const st = companyState();
+        addActivity({ type: "system", text: `引擎: ${st.running ? "运转中" : "停止"} | 活跃项目: ${st.active.length}/${st.pool.length} | 员工: ${ROSTER.length}` });
+        break;
+      }
+      case "/exit": {
+        exit();
+        break;
+      }
+    }
+  }, [addActivity, runTask, createProject, tok, exit]);
+
+  // ─── 键盘监听（稳定引用）───
   const S = useRef({});
-  S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
+  S.current = { input, busy, history, historyIdx };
 
-  // 用 ref 存 handler，useInput 只挂一次
   const handlerRef = useRef(null);
   handlerRef.current = (ch, key) => {
     const s = S.current;
 
-    // Ctrl+C — 交给 Ink exitOnCtrlC
-    if (key.ctrl && (ch === "c" || ch === "C")) return;
+    // Ctrl+C — 退出
+    if (key.ctrl && (ch === "c" || ch === "C")) { exit(); return; }
 
-    // 弹窗模式
-    if (s.dialog) {
-      const list = dialogItems(s.dialog);
-      if (key.upArrow) setDialogSel(v => Math.max(0, v - 1));
-      if (key.downArrow) setDialogSel(v => Math.min(list.length - 1, v + 1));
-      if (key.escape) setDialog(null);
-      if (key.return) { list[S.current.dialogSel]?.onPick?.(); setDialog(null); setDialogSel(0); }
+    // Enter — 提交
+    if (key.return) {
+      const t = s.input.trim();
+      setInput("");
+      setHistoryIdx(-1);
+      if (!t) return;
+      setHistory(prev => [...prev.slice(-49), t]);
+      handleCommand(t);
       return;
     }
 
-    // Ctrl+ 快捷键
-    if (key.ctrl) {
-      if (ch === "p" && !s.busy) { setDialog("proj"); setDialogSel(0); return; }
-      if (ch === "a" && !s.busy) { setDialog("agent"); setDialogSel(0); return; }
-      if (ch === "b") { setDialog("bill"); setDialogSel(0); return; }
-      if (ch === "h") { runSlash("/history"); return; }
-      if (ch === "x") {
-        setExpandedIds(prev => {
-          const ns = new Set(prev);
-          const toolIds = s.entries.filter(e => e.kind === "tool").map(e => e.id);
-          const last = toolIds[toolIds.length - 1];
-          if (last) { if (ns.has(last)) ns.delete(last); else ns.add(last); }
-          return ns;
-        });
-        return;
+    // Escape — 清空输入
+    if (key.escape) { setInput(""); setHistoryIdx(-1); return; }
+
+    // Backspace
+    if (key.backspace) { setInput(i => i.slice(0, -1)); return; }
+
+    // 上下箭头 — 历史
+    if (key.upArrow) {
+      if (s.history.length === 0) return;
+      const newIdx = s.historyIdx < 0 ? s.history.length - 1 : Math.max(0, s.historyIdx - 1);
+      setHistoryIdx(newIdx);
+      setInput(s.history[newIdx] || "");
+      return;
+    }
+    if (key.downArrow) {
+      if (s.historyIdx < 0) return;
+      const newIdx = s.historyIdx + 1;
+      if (newIdx >= s.history.length) { setHistoryIdx(-1); setInput(""); }
+      else { setHistoryIdx(newIdx); setInput(s.history[newIdx] || ""); }
+      return;
+    }
+
+    // Tab — 自动补全
+    if (key.tab) {
+      const t = s.input.trim();
+      if (t.startsWith("/")) {
+        const matches = Object.keys(COMMANDS).filter(c => c.startsWith(t));
+        if (matches.length === 1) setInput(matches[0] + " ");
+        else if (matches.length > 1) {
+          addActivity({ type: "system", text: "补全: " + matches.join("  ") });
+        }
       }
       return;
     }
 
-    // 特殊键
-    if (key.pageUp) { setScrollFromBottom(v => v + 10); return; }
-    if (key.pageDown) { setScrollFromBottom(v => Math.max(0, v - 10)); return; }
-
-    // Enter
-    if (key.return) {
-      const t = s.input.trim();
-      setInput("");
-      if (!t) return;
-      if (t.startsWith("/")) { runSlash(t); return; }
-      submitTask(t);
-      return;
-    }
-    // Escape — 清空输入
-    if (key.escape) { setInput(""); setNotice(""); return; }
-    // Backspace / Delete
-    if (key.backspace || key.delete) { setInput(i => i.slice(0, -1)); return; }
-    // 普通字符 → 追加到输入框
+    // 普通字符
     if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
       setInput(i => i + ch);
     }
   };
 
-  // 稳定引用：useInput 只注册一次，内部通过 ref 调最新 handler
   const stableInput = useCallback((ch, key) => { handlerRef.current(ch, key); }, []);
   useInput(stableInput);
 
-  function dialogItems(type) {
-    if (type === "proj") {
-      const st = companyState();
-      const items = st.pool.map(p => ({
-        label: `${p.status === "active" ? "🟢" : "⏸"} ${p.id}`,
-        onPick: () => { setFocusProj(p.id); notice_("聚焦: " + p.id); },
-      }));
-      items.push({ label: "🌐 取消聚焦", onPick: () => { setFocusProj(null); notice_("已取消"); } });
-      return items;
-    }
-    if (type === "agent") {
-      return AGENTS.map(([id, name, desc]) => ({
-        label: `${name.padEnd(10)} ${desc}`,
-        onPick: () => submitTask(`向${name}报到并简述职责`, id),
-      }));
-    }
-    return [];
-  }
-
-  // ─────────── 渲染 ───────────
+  // ─── 渲染 ───
   const st = companyState();
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  const SIDEBAR_W = 30;
-  const MAIN_W = W - SIDEBAR_W;
-  const CHAT_H = Math.max(6, H - 7);
 
   const breath = tick % 2 === 0 ? "●" : "○";
   const engColor = busy ? C.warn : st.running ? C.success : C.muted;
+  const engText = busy ? "工作中" : st.running ? "运转中" : "停止";
 
-  // 渲染条目为行数组（带窗口与展开态）
-  const rendered = [];
-  const visEntries = entries.slice(-(CHAT_H + 20)); // 多取一些，裁剪时保量
-  for (const e of visEntries) {
-    const expanded = expandedIds.has(e.id);
-    const node = EntryView({ e, w: MAIN_W - 2, expanded });
-    rendered.push(<Box key={e.id}>{node}</Box>);
-  }
+  // 办公室区域高度
+  const HEADER_H = 3;
+  const INPUT_H = 3;
+  const ACTIVITY_H = Math.max(4, H - HEADER_H - INPUT_H - 12);
+  const OFFICE_H = H - HEADER_H - ACTIVITY_H - INPUT_H - 1;
 
-  // 可视窗口：贴底或上翻
-  const from = Math.max(0, rendered.length - CHAT_H - scrollFromBottom);
-  const visible = rendered.slice(from, from + CHAT_H);
+  // 当前忙碌的员工状态
+  const employeeStatus = ROSTER.map(a => {
+    if (busy && busyAgent === a.id) return { ...a, status: "working", task: busyTask, progress: undefined };
+    return { ...a, status: "idle", task: null };
+  });
+
+  // 最近活动
+  const recentActivities = activities.slice(-ACTIVITY_H);
 
   return (
     <Box flexDirection="column" width={W} height={H}>
-      {/* Header */}
-      <Box borderStyle={{topLeft:"╭",top:"─",topRight:"╮",left:"│",right:"│",bottomLeft:"╰",bottom:"─",bottomRight:"╯"}}
-           borderColor={C.border} width={W}>
-        <Text>
-          {" "}
-          <Text bold color={C.primary}>⌬ OPC</Text>
-          <Text color={engColor}> [{breath} 引擎:{busy?"工作中":st.running?"运转中":"停止"}]</Text>
-          <Text color={C.text}> [池 {st.active.length}/{st.pool.length}]</Text>
-          <Text color={C.muted}> [员工 {AGENTS.length}]</Text>
-          <Text color={C.warn}> [↑{tok.p} ↓{tok.c}]</Text>
-          <Text dimColor> {trunc(model, 24)}</Text>
-          {focusProj ? <Text color={C.warn}> [🎯{focusProj}]</Text> : null}
-        </Text>
+      {/* ═══ 头部：公司状态 ═══ */}
+      <Box
+        borderStyle={{ topLeft: "╔", top: "═", topRight: "╗", left: "║", right: "║", bottomLeft: "╚", bottom: "═", bottomRight: "╝" }}
+        borderColor={C.border}
+        width={W}
+        height={HEADER_H}
+        flexDirection="column"
+        paddingX={1}
+      >
+        <Box>
+          <Text bold color={C.accent}>🏢 OPC 永动公司</Text>
+          <Text color={C.muted}>{" │ "}</Text>
+          <Text color={engColor}>{breath} 引擎: {engText}</Text>
+          <Text color={C.muted}>{" │ "}</Text>
+          <Text color={C.text}>📊 {st.active.length}/{st.pool.length} 项目</Text>
+          <Text color={C.muted}>{" │ "}</Text>
+          <Text color={C.text}>👥 {ROSTER.length} 员工</Text>
+          <Text color={C.muted}>{" │ "}</Text>
+          <Text color={C.warn}>💰 ↑{tok.p} ↓{tok.c}</Text>
+          <Text color={C.muted}>{" │ "}</Text>
+          <Text dimColor>{trunc(model, 24)}</Text>
+          {focusProj ? <><Text color={C.muted}>{" │ "}</Text><Text color={C.warn}>🎯 {focusProj}</Text></> : null}
+        </Box>
       </Box>
 
-      {/* 双栏主体 */}
-      <Box flexDirection="row" height={CHAT_H}>
-        {/* 左：对话 */}
-        <Box flexDirection="column" width={MAIN_W} paddingX={1}>
-          {visible}
-          {busy ? <Text color={C.warn} paddingLeft={namePad()}>  ⟳ 编排中…</Text> : null}
-          {scrollFromBottom > 0 ? <Text dimColor>  ↕ 上翻 {scrollFromBottom} 行 (PgDn 回底)</Text> : null}
+      {/* ═══ 主体：办公室 + 活动流 ═══ */}
+      <Box flexDirection="row" height={OFFICE_H + ACTIVITY_H}>
+        {/* 左：办公室（员工工位） */}
+        <Box
+          flexDirection="column"
+          width={Math.floor(W * 0.45)}
+          height={OFFICE_H + ACTIVITY_H}
+          paddingX={1}
+        >
+          <Text bold color={C.accent}>┌─ 办公室 ─┐</Text>
+          <Box flexDirection="column" marginTop={0}>
+            {employeeStatus.map(a => (
+              <EmployeeDesk
+                key={a.id}
+                agent={a}
+                status={a.status}
+                task={a.task}
+                progress={a.progress}
+                width={Math.floor(W * 0.45) - 2}
+              />
+            ))}
+          </Box>
         </Box>
+
         {/* 分隔线 */}
-        <Box width={1}><Text color={C.border}>{"│".repeat(Math.max(1, CHAT_H))}</Text></Box>
-        {/* 右：侧栏 */}
-        <Box flexDirection="column" width={SIDEBAR_W - 1} paddingX={1}>
-          <Text bold color={C.primary}>📦 项目池</Text>
-          {st.pool.map(p => (
-            <Text key={p.id} color={p.status==="active"?C.success:C.muted}>
-              {" "}{p.status==="active"?"🟢":"⏸"} {trunc(p.id, SIDEBAR_W-10)}
-            </Text>
-          ))}
-          {!st.pool.length ? <Text dimColor>  (空)</Text> : null}
-          <Text> </Text>
-          <Text bold color={C.primary}>👥 员工</Text>
-          {AGENTS.slice(0, Math.max(0, CHAT_H - 8 - st.pool.length * 1)).map(([id, name]) => (
-            <Text key={id} color={C.muted}>{"  "}{trunc(name, SIDEBAR_W-8)}</Text>
-          ))}
-          <Box marginTop={1}><Text dimColor>💰 ↑{tok.p} ↓{tok.c}</Text></Box>
-          {notice ? <Text color={C.warn}>{trunc(notice, SIDEBAR_W-2)}</Text> : null}
+        <Box width={1}>
+          <Text color={C.border}>{"│".repeat(OFFICE_H + ACTIVITY_H)}</Text>
+        </Box>
+
+        {/* 右：活动流 */}
+        <Box
+          flexDirection="column"
+          width={W - Math.floor(W * 0.45) - 1}
+          height={OFFICE_H + ACTIVITY_H}
+          paddingX={1}
+        >
+          <Text bold color={C.accent}>┌─ 实时动态 ─┐</Text>
+          <Box flexDirection="column" marginTop={0}>
+            {recentActivities.length === 0 ? (
+              <Text dimColor>  暂无活动，等待 CEO 指令…</Text>
+            ) : (
+              recentActivities.map((item, i) => (
+                <ActivityItem key={i} item={item} width={W - Math.floor(W * 0.45) - 4} />
+              ))
+            )}
+          </Box>
         </Box>
       </Box>
 
-      {/* 输入 */}
-      <Box borderStyle="round" borderColor={C.border} paddingX={1} width={W}>
-        <Text color={C.primary} bold>{"❯ "}</Text>
-        <Text color={C.text}>{input}</Text>
-        {!busy ? <Text dimColor>_</Text> : <Text color={C.warn}>⟳</Text>}
-      </Box>
-      <Text dimColor>
-        {" Enter发送 · Ctrl+X展开 · Ctrl+P项目 · Ctrl+A员工 · Ctrl+B账单 · Ctrl+H历史 · Esc清空 · Ctrl+C退出"}
-      </Text>
-
-      {/* 弹窗覆盖层 */}
-      {dialog ? (
-        <Box flexDirection="column" borderStyle="double" borderColor={C.primary} paddingX={1} width={W}>
-          <Text bold color={C.primary}>
-            {dialog === "proj" ? "📦 选择项目" : dialog === "agent" ? "👤 员工列表" : dialog === "bill" ? "💰 账单" : "──"}
-          </Text>
-          <Text> </Text>
-          {dialogItems(dialog).map((item, i) => (
-            <Text key={i} color={i === dialogSel ? C.primary : C.text} bold={i === dialogSel}>
-              {i === dialogSel ? "▸ " : "  "}{item.label}
-            </Text>
-          ))}
-          <Text> </Text>
-          <Text dimColor>↑↓选择 · Enter确认 · Esc关闭</Text>
+      {/* ═══ 输入栏 ═══ */}
+      <Box
+        borderStyle={{ topLeft: "┌", top: "─", topRight: "┐", left: "│", right: "│", bottomLeft: "└", bottom: "─", bottomRight: "┘" }}
+        borderColor={busy ? C.warn : C.border}
+        width={W}
+        height={INPUT_H}
+        flexDirection="column"
+        paddingX={1}
+      >
+        <Box>
+          <Text color={C.ceo} bold>👑 CEO </Text>
+          <Text color={C.muted}>{"> "}</Text>
+          <Text color={C.text}>{input}</Text>
+          {!busy ? <Text color={C.accent}>▌</Text> : <Text color={C.warn}> ⏳</Text>}
         </Box>
-      ) : null}
+        <Text dimColor>{"  输入命令: /help 查看帮助 | /say <员工> <消息> | /project list | /new <名称> <需求>"}</Text>
+      </Box>
     </Box>
   );
 }
 
-function namePad() { return 4; }
-
-// ─────────── 启动 ───────────
+// ═══════════════════════════════════════════════
+//  启动
+// ═══════════════════════════════════════════════
 const idx = process.argv.indexOf("--dir");
 const dirArg = idx > -1 ? path.resolve(process.argv[idx + 1]) : process.cwd();
 if (!fs.existsSync(dirArg)) { console.error("目录不存在:", dirArg); process.exit(1); }
