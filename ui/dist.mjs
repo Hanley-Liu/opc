@@ -2,7 +2,7 @@
 
 // opc.jsx
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { render, Box, Text, useInput, useApp } from "ink";
+import { render, Box, Text, useApp, useInput } from "ink";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -394,49 +394,56 @@ function App({ initialDir }) {
         notice_("\u672A\u77E5\u547D\u4EE4 " + cmd + " \xB7 /help");
     }
   }
+  const S = useRef({});
+  S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
   useInput((ch, key) => {
-    if (key.ctrl && ch === "c") {
-      exit();
-      return;
-    }
-    if (dialog) {
-      const list = dialogItems(dialog);
-      if (key.upArrow) setDialogSel((s) => Math.max(0, s - 1));
-      if (key.downArrow) setDialogSel((s) => Math.min(list.length - 1, s + 1));
+    const s = S.current;
+    if (key.ctrl && (ch === "c" || ch === "C")) return;
+    if (s.dialog) {
+      const list = dialogItems(s.dialog);
+      if (key.upArrow) setDialogSel((v) => Math.max(0, v - 1));
+      if (key.downArrow) setDialogSel((v) => Math.min(list.length - 1, v + 1));
       if (key.escape) setDialog(null);
       if (key.return) {
-        list[dialogSel]?.onPick?.();
+        list[S.current.dialogSel]?.onPick?.();
         setDialog(null);
         setDialogSel(0);
       }
       return;
     }
-    if (ch === "p" && !input && !busy) {
-      setDialog("proj");
-      setDialogSel(0);
-      return;
-    }
-    if (ch === "a" && !input && !busy) {
-      setDialog("agent");
-      setDialogSel(0);
-      return;
-    }
-    if (ch === "b" && !input) {
-      setDialog("bill");
-      setDialogSel(0);
-      return;
-    }
-    if (ch === "x") {
-      setExpandedIds((prev) => {
-        const s = new Set(prev);
-        const toolIds = entries.filter((e) => e.kind === "tool").map((e) => e.id);
-        const last = toolIds[toolIds.length - 1];
-        if (last) {
-          if (s.has(last)) s.delete(last);
-          else s.add(last);
-        }
-        return s;
-      });
+    if (key.ctrl) {
+      if (ch === "p" && !s.busy) {
+        setDialog("proj");
+        setDialogSel(0);
+        return;
+      }
+      if (ch === "a" && !s.busy) {
+        setDialog("agent");
+        setDialogSel(0);
+        return;
+      }
+      if (ch === "b") {
+        setDialog("bill");
+        setDialogSel(0);
+        return;
+      }
+      if (ch === "h") {
+        runSlash("/history");
+        return;
+      }
+      if (ch === "x") {
+        setExpandedIds((prev) => {
+          const ns = new Set(prev);
+          const toolIds = s.entries.filter((e) => e.kind === "tool").map((e) => e.id);
+          const last = toolIds[toolIds.length - 1];
+          if (last) {
+            if (ns.has(last)) ns.delete(last);
+            else ns.add(last);
+          }
+          return ns;
+        });
+        return;
+      }
       return;
     }
     if (key.pageUp) {
@@ -448,7 +455,7 @@ function App({ initialDir }) {
       return;
     }
     if (key.return) {
-      const t = input.trim();
+      const t = s.input.trim();
       setInput("");
       if (!t) return;
       if (t.startsWith("/")) {
@@ -520,7 +527,7 @@ function App({ initialDir }) {
       width: W
     },
     /* @__PURE__ */ React.createElement(Text, null, " ", /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u232C OPC"), /* @__PURE__ */ React.createElement(Text, { color: engColor }, " [", breath, " \u5F15\u64CE:", busy ? "\u5DE5\u4F5C\u4E2D" : st.running ? "\u8FD0\u8F6C\u4E2D" : "\u505C\u6B62", "]"), /* @__PURE__ */ React.createElement(Text, { color: C.text }, " [\u6C60 ", st.active.length, "/", st.pool.length, "]"), /* @__PURE__ */ React.createElement(Text, { color: C.muted }, " [\u5458\u5DE5 ", AGENTS.length, "]"), /* @__PURE__ */ React.createElement(Text, { color: C.warn }, " [\u2191", tok.p, " \u2193", tok.c, "]"), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " ", trunc(model, 24)), focusProj ? /* @__PURE__ */ React.createElement(Text, { color: C.warn }, " [\u{1F3AF}", focusProj, "]") : null)
-  ), /* @__PURE__ */ React.createElement(Box, { flexDirection: "row", height: CHAT_H }, /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: MAIN_W, paddingX: 1 }, visible, busy ? /* @__PURE__ */ React.createElement(Text, { color: C.warn, paddingLeft: namePad() }, "  \u27F3 \u7F16\u6392\u4E2D\u2026") : null, scrollFromBottom > 0 ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  \u2195 \u4E0A\u7FFB ", scrollFromBottom, " \u884C (PgDn \u56DE\u5E95)") : null), /* @__PURE__ */ React.createElement(Box, { width: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.border }, "\u2502".repeat(Math.max(1, CHAT_H)))), /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: SIDEBAR_W - 1, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F4E6} \u9879\u76EE\u6C60"), st.pool.map((p) => /* @__PURE__ */ React.createElement(Text, { key: p.id, color: p.status === "active" ? C.success : C.muted }, " ", p.status === "active" ? "\u{1F7E2}" : "\u23F8", " ", trunc(p.id, SIDEBAR_W - 10))), !st.pool.length ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  (\u7A7A)") : null, /* @__PURE__ */ React.createElement(Text, null, " "), /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F465} \u5458\u5DE5"), AGENTS.slice(0, Math.max(0, CHAT_H - 8 - st.pool.length * 1)).map(([id, name]) => /* @__PURE__ */ React.createElement(Text, { key: id, color: C.muted }, "  ", trunc(name, SIDEBAR_W - 8))), /* @__PURE__ */ React.createElement(Box, { marginTop: 1 }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u{1F4B0} \u2191", tok.p, " \u2193", tok.c)), notice ? /* @__PURE__ */ React.createElement(Text, { color: C.warn }, trunc(notice, SIDEBAR_W - 2)) : null)), /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1, width: W }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), !busy ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_") : /* @__PURE__ */ React.createElement(Text, { color: C.warn }, "\u27F3")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " Enter \u53D1\u9001 \xB7 x \u5C55\u5F00 \xB7 PgUp/PgDn \u7FFB\u9875 \xB7 p \u9879\u76EE \xB7 a \u5458\u5DE5 \xB7 b \u8D26\u5355 \xB7 h \u5386\u53F2 \xB7 Ctrl+C \u9000\u51FA"));
+  ), /* @__PURE__ */ React.createElement(Box, { flexDirection: "row", height: CHAT_H }, /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: MAIN_W, paddingX: 1 }, visible, busy ? /* @__PURE__ */ React.createElement(Text, { color: C.warn, paddingLeft: namePad() }, "  \u27F3 \u7F16\u6392\u4E2D\u2026") : null, scrollFromBottom > 0 ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  \u2195 \u4E0A\u7FFB ", scrollFromBottom, " \u884C (PgDn \u56DE\u5E95)") : null), /* @__PURE__ */ React.createElement(Box, { width: 1 }, /* @__PURE__ */ React.createElement(Text, { color: C.border }, "\u2502".repeat(Math.max(1, CHAT_H)))), /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", width: SIDEBAR_W - 1, paddingX: 1 }, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F4E6} \u9879\u76EE\u6C60"), st.pool.map((p) => /* @__PURE__ */ React.createElement(Text, { key: p.id, color: p.status === "active" ? C.success : C.muted }, " ", p.status === "active" ? "\u{1F7E2}" : "\u23F8", " ", trunc(p.id, SIDEBAR_W - 10))), !st.pool.length ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "  (\u7A7A)") : null, /* @__PURE__ */ React.createElement(Text, null, " "), /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, "\u{1F465} \u5458\u5DE5"), AGENTS.slice(0, Math.max(0, CHAT_H - 8 - st.pool.length * 1)).map(([id, name]) => /* @__PURE__ */ React.createElement(Text, { key: id, color: C.muted }, "  ", trunc(name, SIDEBAR_W - 8))), /* @__PURE__ */ React.createElement(Box, { marginTop: 1 }, /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u{1F4B0} \u2191", tok.p, " \u2193", tok.c)), notice ? /* @__PURE__ */ React.createElement(Text, { color: C.warn }, trunc(notice, SIDEBAR_W - 2)) : null)), /* @__PURE__ */ React.createElement(Box, { borderStyle: "round", borderColor: C.border, paddingX: 1, width: W }, /* @__PURE__ */ React.createElement(Text, { color: C.primary, bold: true }, "\u276F "), /* @__PURE__ */ React.createElement(Text, { color: C.text }, input), !busy ? /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "_") : /* @__PURE__ */ React.createElement(Text, { color: C.warn }, "\u27F3")), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, " Enter\u53D1\u9001 \xB7 Ctrl+X\u5C55\u5F00 \xB7 Ctrl+P\u9879\u76EE \xB7 Ctrl+A\u5458\u5DE5 \xB7 Ctrl+B\u8D26\u5355 \xB7 Ctrl+H\u5386\u53F2 \xB7 Esc\u6E05\u7A7A \xB7 Ctrl+C\u9000\u51FA"), dialog ? /* @__PURE__ */ React.createElement(Box, { flexDirection: "column", borderStyle: "double", borderColor: C.primary, paddingX: 1, width: W }, /* @__PURE__ */ React.createElement(Text, { bold: true, color: C.primary }, dialog === "proj" ? "\u{1F4E6} \u9009\u62E9\u9879\u76EE" : dialog === "agent" ? "\u{1F464} \u5458\u5DE5\u5217\u8868" : dialog === "bill" ? "\u{1F4B0} \u8D26\u5355" : "\u2500\u2500"), /* @__PURE__ */ React.createElement(Text, null, " "), dialogItems(dialog).map((item, i) => /* @__PURE__ */ React.createElement(Text, { key: i, color: i === dialogSel ? C.primary : C.text, bold: i === dialogSel }, i === dialogSel ? "\u25B8 " : "  ", item.label)), /* @__PURE__ */ React.createElement(Text, null, " "), /* @__PURE__ */ React.createElement(Text, { dimColor: true }, "\u2191\u2193\u9009\u62E9 \xB7 Enter\u786E\u8BA4 \xB7 Esc\u5173\u95ED")) : null);
 }
 function namePad() {
   return 4;

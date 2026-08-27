@@ -2,7 +2,7 @@
 // opc — OPC 永动公司驾驶台 v3
 // 设计定稿：双栏布局（左对话 / 右公司侧栏）+ opencode 消息规范（说话人标签+折叠工具）
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { render, Box, Text, useInput, useApp } from "ink";
+import { render, Box, Text, useApp, useInput } from "ink";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import fs from "node:fs";
@@ -366,44 +366,63 @@ function App({ initialDir }) {
     }
   }
 
+  // ─── 键盘监听 ───
+  const S = useRef({});
+  S.current = { dialog, input, busy, entries, scrollFromBottom, dialogSel };
+
   useInput((ch, key) => {
-    if (key.ctrl && ch === "c") { exit(); return; }
+    const s = S.current;
 
-    if (dialog) {
-      const list = dialogItems(dialog);
-      if (key.upArrow) setDialogSel(s => Math.max(0, s - 1));
-      if (key.downArrow) setDialogSel(s => Math.min(list.length - 1, s + 1));
+    // Ctrl+C — 交给 Ink exitOnCtrlC
+    if (key.ctrl && (ch === "c" || ch === "C")) return;
+
+    // 弹窗模式
+    if (s.dialog) {
+      const list = dialogItems(s.dialog);
+      if (key.upArrow) setDialogSel(v => Math.max(0, v - 1));
+      if (key.downArrow) setDialogSel(v => Math.min(list.length - 1, v + 1));
       if (key.escape) setDialog(null);
-      if (key.return) { list[dialogSel]?.onPick?.(); setDialog(null); setDialogSel(0); }
+      if (key.return) { list[S.current.dialogSel]?.onPick?.(); setDialog(null); setDialogSel(0); }
       return;
     }
 
-    if (ch === "p" && !input && !busy) { setDialog("proj"); setDialogSel(0); return; }
-    if (ch === "a" && !input && !busy) { setDialog("agent"); setDialogSel(0); return; }
-    if (ch === "b" && !input) { setDialog("bill"); setDialogSel(0); return; }
-    if (ch === "x") {
-      setExpandedIds(prev => {
-        const s = new Set(prev);
-        const toolIds = entries.filter(e => e.kind === "tool").map(e => e.id);
-        const last = toolIds[toolIds.length - 1];
-        if (last) { if (s.has(last)) s.delete(last); else s.add(last); }
-        return s;
-      });
+    // Ctrl+ 快捷键
+    if (key.ctrl) {
+      if (ch === "p" && !s.busy) { setDialog("proj"); setDialogSel(0); return; }
+      if (ch === "a" && !s.busy) { setDialog("agent"); setDialogSel(0); return; }
+      if (ch === "b") { setDialog("bill"); setDialogSel(0); return; }
+      if (ch === "h") { runSlash("/history"); return; }
+      if (ch === "x") {
+        setExpandedIds(prev => {
+          const ns = new Set(prev);
+          const toolIds = s.entries.filter(e => e.kind === "tool").map(e => e.id);
+          const last = toolIds[toolIds.length - 1];
+          if (last) { if (ns.has(last)) ns.delete(last); else ns.add(last); }
+          return ns;
+        });
+        return;
+      }
       return;
     }
+
+    // 特殊键
     if (key.pageUp) { setScrollFromBottom(v => v + 10); return; }
     if (key.pageDown) { setScrollFromBottom(v => Math.max(0, v - 10)); return; }
 
+    // Enter
     if (key.return) {
-      const t = input.trim();
+      const t = s.input.trim();
       setInput("");
       if (!t) return;
       if (t.startsWith("/")) { runSlash(t); return; }
       submitTask(t);
       return;
     }
+    // Escape — 清空输入
     if (key.escape) { setInput(""); setNotice(""); return; }
+    // Backspace / Delete
     if (key.backspace || key.delete) { setInput(i => i.slice(0, -1)); return; }
+    // 普通字符 → 追加到输入框
     if (ch && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
       setInput(i => i + ch);
     }
@@ -505,8 +524,25 @@ function App({ initialDir }) {
         {!busy ? <Text dimColor>_</Text> : <Text color={C.warn}>⟳</Text>}
       </Box>
       <Text dimColor>
-        {" Enter 发送 · x 展开 · PgUp/PgDn 翻页 · p 项目 · a 员工 · b 账单 · h 历史 · Ctrl+C 退出"}
+        {" Enter发送 · Ctrl+X展开 · Ctrl+P项目 · Ctrl+A员工 · Ctrl+B账单 · Ctrl+H历史 · Esc清空 · Ctrl+C退出"}
       </Text>
+
+      {/* 弹窗覆盖层 */}
+      {dialog ? (
+        <Box flexDirection="column" borderStyle="double" borderColor={C.primary} paddingX={1} width={W}>
+          <Text bold color={C.primary}>
+            {dialog === "proj" ? "📦 选择项目" : dialog === "agent" ? "👤 员工列表" : dialog === "bill" ? "💰 账单" : "──"}
+          </Text>
+          <Text> </Text>
+          {dialogItems(dialog).map((item, i) => (
+            <Text key={i} color={i === dialogSel ? C.primary : C.text} bold={i === dialogSel}>
+              {i === dialogSel ? "▸ " : "  "}{item.label}
+            </Text>
+          ))}
+          <Text> </Text>
+          <Text dimColor>↑↓选择 · Enter确认 · Esc关闭</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
